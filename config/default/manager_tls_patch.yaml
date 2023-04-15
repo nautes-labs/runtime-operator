@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: system
+spec:
+  template:
+    spec:
+      containers:
+      - name: manager
+        volumeMounts:
+          - name: ca
+            mountPath: "/ca/ca.crt"
+            subPath: ca.crt
+            readOnly: true
+          - name: client
+            mountPath: "/ca/client.crt"
+            subPath: tls.crt
+            readOnly: true
+          - name: client
+            mountPath: "/ca/client.key"
+            subPath: tls.key
+            readOnly: true
+      volumes:
+        - name: ca
+          secret:
+            secretName: global-ca
+        - name: client
+          secret:
+            secretName: runtime-keypair
