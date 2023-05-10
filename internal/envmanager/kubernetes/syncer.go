@@ -57,7 +57,7 @@ func (m Syncer) GetAccessInfo(ctx context.Context, cluster nautescrd.Cluster) (*
 }
 
 // Sync create or update a usable env for the next step, it will create namespaces, rolebinding and other resources runtime required.
-func (m Syncer) Sync(ctx context.Context, task interfaces.DeployTask) (*interfaces.EnvSyncResult, error) {
+func (m Syncer) Sync(ctx context.Context, task interfaces.RuntimeSyncTask) (*interfaces.EnvSyncResult, error) {
 	destCluster, err := newDestCluster(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("create dest cluster client failed: %w", err)
@@ -104,7 +104,7 @@ func (m Syncer) Sync(ctx context.Context, task interfaces.DeployTask) (*interfac
 }
 
 // Remove will cleaa up resouces Sync create.
-func (m Syncer) Remove(ctx context.Context, task interfaces.DeployTask) error {
+func (m Syncer) Remove(ctx context.Context, task interfaces.RuntimeSyncTask) error {
 	logger := log.FromContext(ctx)
 
 	destCluster, err := newDestCluster(ctx, task)
@@ -134,7 +134,7 @@ func (m Syncer) Remove(ctx context.Context, task interfaces.DeployTask) error {
 	return nil
 }
 
-func (m Syncer) getRepos(ctx context.Context, task interfaces.DeployTask) ([]interfaces.SecretInfo, error) {
+func (m Syncer) getRepos(ctx context.Context, task interfaces.RuntimeSyncTask) ([]interfaces.SecretInfo, error) {
 	artifactRepos := &nautescrd.ArtifactRepoList{}
 	listOpts := []client.ListOption{
 		client.InNamespace(task.Product.Name),

@@ -37,8 +37,8 @@ type AccessInfo struct {
 
 type EnvManager interface {
 	GetAccessInfo(ctx context.Context, cluster nautescrd.Cluster) (*AccessInfo, error)
-	Sync(ctx context.Context, task DeployTask) (*EnvSyncResult, error)
-	Remove(ctx context.Context, task DeployTask) error
+	Sync(ctx context.Context, task RuntimeSyncTask) (*EnvSyncResult, error)
+	Remove(ctx context.Context, task RuntimeSyncTask) error
 }
 
 type EnvSyncResult struct {
@@ -55,4 +55,5 @@ type AdditionalResource struct {
 type Runtime interface {
 	GetProduct() string
 	GetName() string
+	GetDestination() string
 }

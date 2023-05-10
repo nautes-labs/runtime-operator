@@ -24,15 +24,18 @@ import (
 
 	nautesv1alpha1 "github.com/nautes-labs/pkg/api/v1alpha1"
 	configs "github.com/nautes-labs/pkg/pkg/nautesconfigs"
-	deployment "github.com/nautes-labs/runtime-operator/internal/deployment/argocd"
-	envmgr "github.com/nautes-labs/runtime-operator/internal/envmanager/kubernetes"
-	syncer "github.com/nautes-labs/runtime-operator/internal/syncer/deploymentruntime"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	deployment "github.com/nautes-labs/runtime-operator/internal/deployment/argocd"
+	envmgr "github.com/nautes-labs/runtime-operator/internal/envmanager/kubernetes"
+	"github.com/nautes-labs/runtime-operator/internal/eventbus/argoevents"
+	"github.com/nautes-labs/runtime-operator/internal/pipeline/tekton"
+	syncer "github.com/nautes-labs/runtime-operator/internal/syncer/runtime"
 
 	"github.com/nautes-labs/runtime-operator/controllers"
 	//+kubebuilder:scaffold:imports
@@ -90,21 +93,35 @@ func main() {
 	syncer.DeployApps["argocd"] = deployment.Syncer{
 		K8sClient: mgr.GetClient(),
 	}
+	syncer.EventBus[configs.EventBusTypeArgoEvent] = argoevents.NewSyncer(mgr.GetClient())
+	syncer.Pipelines[configs.PipelineTypeTekton] = tekton.NewSyncer(mgr.GetClient())
 
 	syncer := &syncer.Syncer{
 		Client: mgr.GetClient(),
 	}
 
+	nautesConfig := configs.NautesConfigs{
+		Namespace: globalConfigNamespace,
+		Name:      globalConfigName,
+	}
+
 	if err = (&controllers.DeploymentRuntimeReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Syncer: syncer,
-		NautesConfig: configs.NautesConfigs{
-			Namespace: globalConfigNamespace,
-			Name:      globalConfigName,
-		},
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Syncer:       syncer,
+		NautesConfig: nautesConfig,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DeploymentRuntime")
+		os.Exit(1)
+	}
+
+	if err = (&controllers.ProjectPipelineRuntimeReconciler{
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Syncer:       syncer,
+		NautesConfig: nautesConfig,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ProjectPipelineRuntime")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder

@@ -18,7 +18,9 @@ import (
 	"fmt"
 
 	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 )
 
 // IsLegal used to check resources is available for reconcile
@@ -35,10 +37,41 @@ func IsLegal(res client.Object, productName string) (string, bool) {
 
 // IsBelongsToProduct check resouces is maintain by nautes
 func IsBelongsToProduct(res client.Object, productName string) bool {
+	if res == nil {
+		return false
+	}
+
 	labels := res.GetLabels()
 	name, ok := labels[nautescrd.LABEL_BELONG_TO_PRODUCT]
 	if !ok || name != productName {
 		return false
 	}
 	return true
+}
+
+// IsOwner check k8s resource is belongs to another resource
+func IsOwner(owner, object client.Object, scheme *runtime.Scheme) bool {
+	if owner == nil {
+		return false
+	}
+
+	if owner.GetNamespace() != object.GetNamespace() || object.GetNamespace() == "" {
+		return false
+	}
+
+	gvk, err := apiutil.GVKForObject(owner, scheme)
+	if err != nil {
+		return false
+	}
+
+	ownerInfos := object.GetOwnerReferences()
+	for _, ownerInfo := range ownerInfos {
+		if ownerInfo.APIVersion == gvk.GroupVersion().String() &&
+			ownerInfo.Kind == gvk.Kind &&
+			ownerInfo.UID == owner.GetUID() &&
+			ownerInfo.Name == owner.GetName() {
+			return true
+		}
+	}
+	return false
 }

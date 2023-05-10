@@ -12,24 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package interfaces
+package tekton
 
-import "context"
+import (
+	"context"
 
-// nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
-
-const (
-	RUNTIME_TYPE_DEPLOYMENT RuntimeType = "deployment"
-	RUNTIME_TYPE_PIPELINE   RuntimeType = "pipeline"
+	interfaces "github.com/nautes-labs/runtime-operator/pkg/interface"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-type RuntimeType string
-
-type Deployment interface {
-	Deploy(ctx context.Context, task RuntimeSyncTask) (*DeployInfo, error)
-	UnDeploy(ctx context.Context, task RuntimeSyncTask) error
+type syncer struct {
+	kubernetesClient client.Client
 }
 
-type DeployInfo struct {
-	Source string
+func NewSyncer(client client.Client) interfaces.Pipeline {
+	return syncer{
+		kubernetesClient: client,
+	}
+}
+
+func (s syncer) DeployPipelineRuntime(ctx context.Context, task interfaces.RuntimeSyncTask) error {
+	return nil
+}
+
+func (s syncer) UnDeployPipelineRuntime(ctx context.Context, task interfaces.RuntimeSyncTask) error {
+	return nil
 }

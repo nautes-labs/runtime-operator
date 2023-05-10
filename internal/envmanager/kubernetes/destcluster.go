@@ -105,7 +105,7 @@ type destCluster struct {
 	k8sClient       client.Client
 }
 
-func newDestCluster(ctx context.Context, task runtimeinterface.DeployTask) (*destCluster, error) {
+func newDestCluster(ctx context.Context, task runtimeinterface.RuntimeSyncTask) (*destCluster, error) {
 	if task.AccessInfo.Type != runtimeinterface.ACCESS_TYPE_K8S {
 		return nil, fmt.Errorf("access type is not supported")
 	}

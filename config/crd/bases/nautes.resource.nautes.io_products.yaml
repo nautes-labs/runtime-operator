@@ -15,7 +15,11 @@ spec:
     singular: product
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.name
+      name: PRODUCTNAME
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Product is the Schema for the products API

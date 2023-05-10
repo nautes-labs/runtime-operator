@@ -45,7 +45,7 @@ var (
 	kubernetesDefaultService = "https://kubernetes.default.svc"
 )
 
-func (d Syncer) Deploy(ctx context.Context, task interfaces.DeployTask) (*interfaces.DeployInfo, error) {
+func (d Syncer) Deploy(ctx context.Context, task interfaces.RuntimeSyncTask) (*interfaces.DeployInfo, error) {
 	history, repoName, destCluster, appProject, app, appSource, policyManager, err := d.initNames(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("init var faled: %w", err)
@@ -87,7 +87,7 @@ func (d Syncer) Deploy(ctx context.Context, task interfaces.DeployTask) (*interf
 	return &interfaces.DeployInfo{Source: repoURL}, nil
 }
 
-func (d Syncer) UnDeploy(ctx context.Context, task interfaces.DeployTask) error {
+func (d Syncer) UnDeploy(ctx context.Context, task interfaces.RuntimeSyncTask) error {
 	history, repoName, destCluster, appProject, app, _, policyManager, err := d.initNames(ctx, task)
 	if err != nil {
 		return fmt.Errorf("init var faled: %w", err)
@@ -137,7 +137,7 @@ func (d Syncer) UnDeploy(ctx context.Context, task interfaces.DeployTask) error 
 	return nil
 }
 
-func (d Syncer) initNames(ctx context.Context, task interfaces.DeployTask) (
+func (d Syncer) initNames(ctx context.Context, task interfaces.RuntimeSyncTask) (
 	history *nautescrd.DeployHistory,
 	repoName string,
 	cluster *destCluster,

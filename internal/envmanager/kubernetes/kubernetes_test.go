@@ -49,7 +49,7 @@ var _ = Describe("EnvManager", func() {
 	var productNamespaceIsTerminating bool
 	var artifactRepos []nautescrd.ArtifactRepo
 
-	var task interfaces.DeployTask
+	var task interfaces.RuntimeSyncTask
 	BeforeEach(func() {
 		productName = fmt.Sprintf("test-project-%s", randNum())
 		groupName = fmt.Sprintf("group-%s", randNum())
@@ -77,7 +77,7 @@ var _ = Describe("EnvManager", func() {
 			},
 		}
 
-		task = interfaces.DeployTask{
+		task = interfaces.RuntimeSyncTask{
 			AccessInfo: *accessInfo,
 			Product: nautescrd.Product{
 				ObjectMeta: metav1.ObjectMeta{

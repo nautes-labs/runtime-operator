@@ -47,7 +47,7 @@ var _ = Describe("Deploy app argocd", func() {
 	var err error
 	var ns *corev1.Namespace
 	var groupPolicy string
-	var task interfaces.DeployTask
+	var task interfaces.RuntimeSyncTask
 
 	BeforeEach(func() {
 		productName = fmt.Sprintf("test-project-%s", randNum())
@@ -120,7 +120,7 @@ var _ = Describe("Deploy app argocd", func() {
 			},
 		}
 
-		task = interfaces.DeployTask{
+		task = interfaces.RuntimeSyncTask{
 			AccessInfo:  accessInfo,
 			Product:     *product,
 			NautesCfg:   *nautesCFG,
