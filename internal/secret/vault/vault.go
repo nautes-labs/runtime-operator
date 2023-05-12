@@ -37,14 +37,10 @@ import (
 )
 
 const (
-	CLUSTER_NAMESPACE         = "cluster"
-	CLUSTER_PATH              = "kubernetes/%s/default/admin"
-	CLUSTER_KUBECONFIG_KEY    = "kubeconfig"
-	_RUNTIME_OPERATOR_NAME    = "Runtime"
-	_GIT_REPO_USER_NAME       = "default"
-	_GIT_REPO_PERMISSION      = "readonly"
-	_ARTIFACT_REPO_USER_NAME  = "default"
-	_ARTIFACT_REPO_PERMISSION = "readonly"
+	CLUSTER_NAMESPACE      = "cluster"
+	CLUSTER_PATH           = "kubernetes/%s/default/admin"
+	CLUSTER_KUBECONFIG_KEY = "kubeconfig"
+	_RUNTIME_OPERATOR_NAME = "Runtime"
 )
 
 type Vault struct {
@@ -52,9 +48,15 @@ type Vault struct {
 	vaultproxy.SecretHTTPClient
 	vaultproxy.AuthHTTPClient
 	vaultproxy.AuthGrantHTTPClient
-	getDBName  map[runtimeinterface.SecretType]string
-	getKeyFunc map[runtimeinterface.SecretType]getSecretKey
+	getDBName            map[runtimeinterface.SecretType]string
+	getKeyFunc           map[runtimeinterface.SecretType]getSecretKey
+	grantPermissionFunc  map[runtimeinterface.SecretType]grantPermission
+	revokePermissionFunc map[runtimeinterface.SecretType]revokePermission
 }
+
+type getSecretKey func(ctx context.Context, repo runtimeinterface.SecretInfo) (string, error)
+type grantPermission func(ctx context.Context, repo runtimeinterface.SecretInfo, destUser, destEnv string) error
+type revokePermission func(ctx context.Context, repo runtimeinterface.SecretInfo, destUser, destEnv string) error
 
 // CreateRole implements interfaces.SecretClient
 func (s *Vault) CreateRole(ctx context.Context, clusterName string, role runtimeinterface.Role) error {
@@ -106,10 +108,11 @@ func (s *Vault) GetRole(ctx context.Context, clusterName string, role runtimeint
 	}
 
 	users := roleInfo.Data["bound_service_account_names"].([]interface{})
+	namespace := roleInfo.Data["bound_service_account_namespaces"].([]interface{})
 	vaultRole := &runtimeinterface.Role{
 		Name:   role.Name,
 		Users:  []string{users[0].(string)},
-		Groups: []string{},
+		Groups: []string{namespace[0].(string)},
 	}
 	return vaultRole, nil
 }
@@ -132,14 +135,12 @@ func (s *Vault) GetSecretKey(ctx context.Context, repo runtimeinterface.SecretIn
 	return fn(ctx, repo)
 }
 
-type getSecretKey func(ctx context.Context, repo runtimeinterface.SecretInfo) (string, error)
-
-func (s *Vault) getGitSecretKey(ctx context.Context, repo runtimeinterface.SecretInfo) (string, error) {
+func (s *Vault) getSecretKeyGit(ctx context.Context, repo runtimeinterface.SecretInfo) (string, error) {
 	meta := &vaultproxy.GitMeta{
 		ProviderType: repo.CodeRepo.ProviderType,
 		Id:           repo.CodeRepo.ID,
-		Username:     _GIT_REPO_USER_NAME,
-		Permission:   _GIT_REPO_PERMISSION,
+		Username:     repo.CodeRepo.User,
+		Permission:   string(repo.CodeRepo.Permission),
 	}
 	secretMeta, err := meta.GetNames()
 	if err != nil {
@@ -148,13 +149,13 @@ func (s *Vault) getGitSecretKey(ctx context.Context, repo runtimeinterface.Secre
 	return secretMeta.SecretPath, nil
 }
 
-func (s *Vault) getArtifactSecretKey(ctx context.Context, repo runtimeinterface.SecretInfo) (string, error) {
+func (s *Vault) getSecretKeyArtifact(ctx context.Context, repo runtimeinterface.SecretInfo) (string, error) {
 	meta := vaultproxy.RepoMeta{
 		ProviderId: repo.AritifaceRepo.ProviderName,
 		Type:       repo.AritifaceRepo.RepoType,
 		Id:         repo.AritifaceRepo.ID,
-		Username:   _ARTIFACT_REPO_USER_NAME,
-		Permission: _ARTIFACT_REPO_PERMISSION,
+		Username:   repo.AritifaceRepo.User,
+		Permission: repo.AritifaceRepo.Permission,
 	}
 	secretMeta, err := meta.GetNames()
 	if err != nil {
@@ -163,35 +164,53 @@ func (s *Vault) getArtifactSecretKey(ctx context.Context, repo runtimeinterface.
 	return secretMeta.SecretPath, nil
 }
 
-func (s *Vault) GrantPermission(ctx context.Context, providerType, repoName, destUser, destEnv string) error {
+func (s *Vault) GrantPermission(ctx context.Context, repo runtimeinterface.SecretInfo, destUser, destEnv string) error {
+	fn, ok := s.grantPermissionFunc[repo.Type]
+	if !ok {
+		return fmt.Errorf("unknow type of secret")
+	}
+	return fn(ctx, repo, destUser, destEnv)
+}
+
+func (s *Vault) grantPermissionGit(ctx context.Context, repo runtimeinterface.SecretInfo, destUser, destEnv string) error {
 	req := &vaultproxy.AuthroleGitPolicyRequest{
 		ClusterName: destEnv,
 		DestUser:    destUser,
 		Secret: &vaultproxy.GitMeta{
-			ProviderType: providerType,
-			Id:           repoName,
-			Username:     _GIT_REPO_USER_NAME,
-			Permission:   _GIT_REPO_PERMISSION,
+			ProviderType: repo.CodeRepo.ProviderType,
+			Id:           repo.CodeRepo.ID,
+			Username:     repo.CodeRepo.User,
+			Permission:   string(repo.CodeRepo.Permission),
 		},
 	}
 	_, err := s.GrantAuthroleGitPolicy(ctx, req)
 	return err
 }
 
-func (s *Vault) RevokePermission(ctx context.Context, providerType, repoName, destUser, destEnv string) error {
+func (s *Vault) RevokePermission(ctx context.Context, repo runtimeinterface.SecretInfo, destUser, destEnv string) error {
+	fn, ok := s.revokePermissionFunc[repo.Type]
+	if !ok {
+		return fmt.Errorf("unknow type of secret")
+	}
+	return fn(ctx, repo, destUser, destEnv)
+}
+
+func (s *Vault) revokePermissionGit(ctx context.Context, repo runtimeinterface.SecretInfo, destUser, destEnv string) error {
 	req := &vaultproxy.AuthroleGitPolicyRequest{
 		ClusterName: destEnv,
 		DestUser:    destUser,
 		Secret: &vaultproxy.GitMeta{
-			ProviderType: providerType,
-			Id:           repoName,
-			Username:     _GIT_REPO_USER_NAME,
-			Permission:   _GIT_REPO_PERMISSION,
+			ProviderType: repo.CodeRepo.ProviderType,
+			Id:           repo.CodeRepo.ID,
+			Username:     repo.CodeRepo.User,
+			Permission:   string(repo.CodeRepo.Permission),
 		},
 	}
+
 	_, err := s.RevokeAuthroleGitPolicy(ctx, req)
 	return err
 }
+
 func NewClient(cfg nautescfg.SecretRepo) (runtimeinterface.SecretClient, error) {
 	vaultClient, err := newVaultClient(cfg)
 	if err != nil {
@@ -216,8 +235,16 @@ func NewClient(cfg nautescfg.SecretRepo) (runtimeinterface.SecretClient, error) 
 	}
 
 	client.getKeyFunc = map[runtimeinterface.SecretType]getSecretKey{
-		runtimeinterface.SECRET_TYPE_GIT:      client.getGitSecretKey,
-		runtimeinterface.SECRET_TYPE_ARTIFACT: client.getArtifactSecretKey,
+		runtimeinterface.SECRET_TYPE_GIT:      client.getSecretKeyGit,
+		runtimeinterface.SECRET_TYPE_ARTIFACT: client.getSecretKeyArtifact,
+	}
+
+	client.grantPermissionFunc = map[runtimeinterface.SecretType]grantPermission{
+		runtimeinterface.SECRET_TYPE_GIT: client.grantPermissionGit,
+	}
+
+	client.revokePermissionFunc = map[runtimeinterface.SecretType]revokePermission{
+		runtimeinterface.SECRET_TYPE_GIT: client.revokePermissionGit,
 	}
 
 	return client, nil

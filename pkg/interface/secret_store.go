@@ -18,7 +18,6 @@ import "context"
 
 type SecretClient interface {
 	Cluster
-	Git
 	Secret
 	Auth
 	Logout() error
@@ -34,14 +33,12 @@ type Cluster interface {
 	GetAccessInfo(ctx context.Context, clusterName string) (string, error)
 }
 
-type Git interface {
-	GrantPermission(ctx context.Context, providerType, repoName, destUser, destEnv string) error
-	RevokePermission(ctx context.Context, providerType, repoName, destUser, destEnv string) error
-}
-
 type Secret interface {
+	// find out secret database name by giving secret info
 	GetSecretDatabaseName(ctx context.Context, repo SecretInfo) (string, error)
 	GetSecretKey(ctx context.Context, repo SecretInfo) (string, error)
+	GrantPermission(ctx context.Context, repo SecretInfo, destUser, destEnv string) error
+	RevokePermission(ctx context.Context, repo SecretInfo, destUser, destEnv string) error
 }
 
 type Role struct {
@@ -65,11 +62,19 @@ type SecretInfo struct {
 	AritifaceRepo *ArifactRepo
 }
 
+type CodeRepoPermission string
+
+const (
+	CodeRepoPermissionReadOnly    = "readonly"
+	CodeRepoPermissionReadWrite   = "readwrite"
+	CodeRepoPermissionAccessToken = "accesstoken-api"
+)
+
 type CodeRepo struct {
 	ProviderType string
 	ID           string
 	User         string
-	Permission   string
+	Permission   CodeRepoPermission
 }
 
 type ArifactRepo struct {

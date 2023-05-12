@@ -11,8 +11,12 @@ import (
 	"github.com/argoproj/argo-events/pkg/apis/common"
 	eventsourcev1alpha1 "github.com/argoproj/argo-events/pkg/apis/eventsource/v1alpha1"
 	sensorv1alpha1 "github.com/argoproj/argo-events/pkg/apis/sensor/v1alpha1"
+	externalsecretcrd "github.com/external-secrets/external-secrets/apis/externalsecrets/v1alpha1"
 	"github.com/google/uuid"
 	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
+	configs "github.com/nautes-labs/pkg/pkg/nautesconfigs"
+	interfaces "github.com/nautes-labs/runtime-operator/pkg/interface"
+	"github.com/nautes-labs/runtime-operator/pkg/utils"
 	nautesutil "github.com/nautes-labs/runtime-operator/pkg/utils"
 	corev1 "k8s.io/api/core/v1"
 	networkv1 "k8s.io/api/networking/v1"
@@ -22,6 +26,16 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	esmetav1 "github.com/external-secrets/external-secrets/apis/meta/v1"
+)
+
+const (
+	codeRepoUserDefault = "default"
+)
+
+const (
+	labelKeyFromCodeRepo = "coderepo-name"
 )
 
 // syncEventSourceGitlab is used to create gitlab type argo events eventsource and the related resources that ensure its normal operation.
@@ -32,7 +46,7 @@ import (
 // - secret of gitlab accesstoken
 // - secret of webhook
 func (s *runtimeSyncer) syncEventSourceGitlab(ctx context.Context) error {
-	vars := copyVars(s.vars)
+	vars := deepCopyStringMap(s.vars)
 	eventSourceName, err := getStringFromTemplate(tmplEventSourceGitlab, vars)
 	if err != nil {
 		return err
@@ -63,7 +77,7 @@ func (s *runtimeSyncer) syncEventSourceGitlabRelatedResources(ctx context.Contex
 		return fmt.Errorf("can not get event source: %w", err)
 	}
 
-	vars := copyVars(s.vars)
+	vars := deepCopyStringMap(s.vars)
 	serviceName, err := getStringFromTemplate(tmplGitlabServiceName, vars)
 	if err != nil {
 		return err
@@ -89,9 +103,13 @@ func (s *runtimeSyncer) syncEventSourceGitlabRelatedResources(ctx context.Contex
 		return fmt.Errorf("sync ingress %s failed: %w", ingressName, err)
 	}
 
-	for _, gitlabEvent := range eventSource.Spec.Gitlab {
+	if err = s.grantPermissions(ctx); err != nil {
+		return fmt.Errorf("grant permissions failed: %w", err)
+	}
+
+	for name, gitlabEvent := range eventSource.Spec.Gitlab {
 		accessTokenName := gitlabEvent.AccessToken.Name
-		if err := s.syncGitlabAccessToken(ctx, accessTokenName, eventSource); err != nil {
+		if err := s.syncGitlabAccessToken(ctx, accessTokenName, name, eventSource); err != nil {
 			return fmt.Errorf("sync gitlab access token failed: %w", err)
 		}
 
@@ -100,6 +118,19 @@ func (s *runtimeSyncer) syncEventSourceGitlabRelatedResources(ctx context.Contex
 			return fmt.Errorf("sync gitlab secret token failed: %w", err)
 		}
 	}
+
+	if err = s.removeExternalSecretExpireOwnerReference(ctx, eventSource); err != nil {
+		return fmt.Errorf("claen expire owner reference failed: %w", err)
+	}
+
+	if err = s.deleteUnusedExternalSecrets(ctx); err != nil {
+		return fmt.Errorf("delete unused external secret failed: %w", err)
+	}
+
+	if err = s.deleteUnUsedSecretsToken(ctx, eventSource); err != nil {
+		return fmt.Errorf("delete unused secret token failed: %w", err)
+	}
+
 	return nil
 }
 
@@ -107,6 +138,23 @@ func (s *runtimeSyncer) deleteEventSourceGitlab(ctx context.Context) error {
 	eventSourceName, err := getStringFromTemplate(tmplEventSourceGitlab, s.vars)
 	if err != nil {
 		return err
+	}
+
+	eventSource := &eventsourcev1alpha1.EventSource{}
+	key := types.NamespacedName{
+		Namespace: s.config.EventBus.ArgoEvents.Namespace,
+		Name:      eventSourceName,
+	}
+	if err != s.k8sClient.Get(ctx, key, eventSource) {
+		return err
+	}
+
+	if err := s.removeExternalSecretOwner(ctx, eventSource); err != nil {
+		return fmt.Errorf("remove external secret owner failed: %w", err)
+	}
+
+	if err = s.deleteUnusedExternalSecrets(ctx); err != nil {
+		return fmt.Errorf("delete unused external secret failed: %w", err)
 	}
 
 	return s.deleteEventSource(ctx, eventSourceName)
@@ -173,8 +221,8 @@ func (s *runtimeSyncer) calculateEventSourceGitlab(ctx context.Context, eventSou
 			return nil, err
 		}
 
-		vars := copyVars(s.vars)
-		vars[keyRepoName] = codeRepo.Name
+		vars := deepCopyStringMap(s.vars)
+		vars[keyRepoName] = evsrc.Gitlab.RepoName
 		vars[keyEventName] = evsrc.Name
 
 		eventName, err := getStringFromTemplate(tmplEventSourceGitlabEventName, vars)
@@ -228,8 +276,363 @@ func (s *runtimeSyncer) calculateEventSourceGitlab(ctx context.Context, eventSou
 	return eventSourceSpec, nil
 }
 
-func (s *runtimeSyncer) syncGitlabAccessToken(ctx context.Context, name string, owner client.Object) error {
+const secretStoreName = "git-secret-store"
+
+func (s *runtimeSyncer) syncGitlabAccessToken(ctx context.Context, name, repoName string, owner client.Object) error {
+	if err := s.syncSecretStore(ctx, secretStoreName); err != nil {
+		return fmt.Errorf("sync secret store %s failed: %w", secretStoreName, err)
+	}
+	esSpec, err := s.caculateExternalSecret(ctx, name)
+	if err != nil {
+		return err
+	}
+	if esSpec == nil {
+		return fmt.Errorf("spec of external secret %s is nil", name)
+	}
+
+	if err := s.syncExternalSecret(ctx, name, repoName, owner, *esSpec); err != nil {
+		return fmt.Errorf("sync external secret %s failed: %w", name, err)
+	}
+
 	return nil
+}
+
+func (s *runtimeSyncer) syncSecretStore(ctx context.Context, name string) error {
+	secStore := &externalsecretcrd.SecretStore{}
+	key := types.NamespacedName{
+		Namespace: s.config.EventBus.ArgoEvents.Namespace,
+		Name:      name,
+	}
+	if err := s.k8sClient.Get(ctx, key, secStore); err != nil {
+		if apierrors.IsNotFound(err) {
+			secStore = &externalsecretcrd.SecretStore{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      key.Name,
+					Namespace: key.Namespace,
+				},
+			}
+		} else {
+			return err
+		}
+	}
+
+	if secStore.DeletionTimestamp != nil && !secStore.DeletionTimestamp.IsZero() {
+		return fmt.Errorf("secret store %s is terminating", name)
+	}
+
+	spec, err := s.caculateSecretStore()
+	if err != nil {
+		return fmt.Errorf("get secret store %s's spec failed: %w", name, err)
+	}
+
+	if reflect.DeepEqual(secStore.Spec, *spec) {
+		secStore.Spec = *spec
+		return s.updateSecretStore(ctx, secStore)
+	}
+
+	return nil
+}
+
+func (s *runtimeSyncer) caculateSecretStore() (*externalsecretcrd.SecretStoreSpec, error) {
+	var spec *externalsecretcrd.SecretStoreSpec
+
+	switch s.config.Secret.RepoType {
+	case configs.SECRET_STORE_VAULT:
+		spec = &externalsecretcrd.SecretStoreSpec{
+			Provider: &externalsecretcrd.SecretStoreProvider{
+				Vault: s.caculateSecretProviderVault(),
+			},
+		}
+	default:
+		return nil, fmt.Errorf("unknow secret type %s", s.config.Secret.RepoType)
+	}
+
+	return spec, nil
+}
+
+const secretEngineNameGit = "git"
+
+func (s *runtimeSyncer) caculateSecretProviderVault() *externalsecretcrd.VaultProvider {
+	path := secretEngineNameGit
+	provider := &externalsecretcrd.VaultProvider{
+		Auth: externalsecretcrd.VaultAuth{
+			Kubernetes: &externalsecretcrd.VaultKubernetesAuth{
+				Path: s.cluster.Name,
+				ServiceAccountRef: &esmetav1.ServiceAccountSelector{
+					Name: s.config.EventBus.ArgoEvents.TemplateServiceAccount,
+				},
+				Role: s.runtime.Name,
+			},
+		},
+		Server:  s.config.Secret.Vault.Addr,
+		Path:    &path,
+		Version: "v2",
+	}
+	return provider
+}
+
+func (s *runtimeSyncer) updateSecretStore(ctx context.Context, obj *externalsecretcrd.SecretStore) error {
+	if obj == nil {
+		return fmt.Errorf("secret store is nil")
+	}
+
+	if obj.CreationTimestamp.IsZero() {
+		return s.k8sClient.Create(ctx, obj)
+	}
+
+	return s.k8sClient.Update(ctx, obj)
+}
+
+func (s *runtimeSyncer) syncExternalSecret(ctx context.Context, name, repoName string, owner client.Object, spec externalsecretcrd.ExternalSecretSpec) error {
+	key := types.NamespacedName{
+		Namespace: s.config.EventBus.ArgoEvents.Namespace,
+		Name:      name,
+	}
+	externalSecret := &externalsecretcrd.ExternalSecret{}
+
+	labels := deepCopyStringMap(s.resouceLabel)
+	labels[labelKeyFromCodeRepo] = repoName
+	if err := s.k8sClient.Get(ctx, key, externalSecret); err != nil {
+		if apierrors.IsNotFound(err) {
+			externalSecret = &externalsecretcrd.ExternalSecret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      key.Name,
+					Namespace: key.Namespace,
+					Labels:    labels,
+				},
+			}
+		} else {
+			return err
+		}
+	}
+
+	reason, ok := utils.IsLegal(externalSecret, s.productName)
+	if !ok {
+		return fmt.Errorf("external secret %s is illegal: %s", name, reason)
+	}
+
+	needUpdate := false
+	if !reflect.DeepEqual(externalSecret.Labels, labels) {
+		externalSecret.Labels = labels
+		needUpdate = true
+	}
+
+	if !utils.IsOwner(owner, externalSecret, scheme) {
+		if err := controllerutil.SetOwnerReference(owner, externalSecret, scheme); err != nil {
+			return fmt.Errorf("set external secret %s's owner failed: %w", name, err)
+		}
+		needUpdate = true
+	}
+
+	if !reflect.DeepEqual(externalSecret.Spec, spec) {
+		externalSecret.Spec = spec
+		needUpdate = true
+	}
+
+	if needUpdate {
+		s.updateExternalSecret(ctx, externalSecret)
+	}
+
+	return nil
+}
+
+func (s *runtimeSyncer) caculateExternalSecret(ctx context.Context, secretName string) (*externalsecretcrd.ExternalSecretSpec, error) {
+	var spec *externalsecretcrd.ExternalSecretSpec
+	var err error
+	switch s.config.Secret.RepoType {
+	case configs.SECRET_STORE_VAULT:
+		spec, err = s.caculateExternalSecretVault(ctx, secretName)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unknow secret type %s", s.config.Secret.RepoType)
+	}
+
+	return spec, nil
+}
+
+const (
+	vaultSecretEngineGitAcessTokenKey = "accesstoken"
+	externalSecretRefSecretStoreKind  = "SecretStore"
+)
+
+func (s *runtimeSyncer) caculateExternalSecretVault(ctx context.Context, secretName string) (*externalsecretcrd.ExternalSecretSpec, error) {
+	secretPath, err := getStringFromTemplate(tmplVaultEngineGitAcessTokenPath, s.vars)
+	if err != nil {
+		return nil, err
+	}
+
+	spec := &externalsecretcrd.ExternalSecretSpec{
+		SecretStoreRef: externalsecretcrd.SecretStoreRef{
+			Name: secretStoreName,
+			Kind: externalSecretRefSecretStoreKind,
+		},
+		Target: externalsecretcrd.ExternalSecretTarget{
+			Name:           secretName,
+			CreationPolicy: externalsecretcrd.Owner,
+		},
+		Data: []externalsecretcrd.ExternalSecretData{
+			{
+				SecretKey: secretKeyAccessToken,
+				RemoteRef: externalsecretcrd.ExternalSecretDataRemoteRef{
+					Key:                secretPath,
+					Property:           vaultSecretEngineGitAcessTokenKey,
+					ConversionStrategy: externalsecretcrd.ExternalSecretConversionDefault,
+				},
+			},
+		},
+	}
+	return spec, nil
+}
+
+func (s *runtimeSyncer) updateExternalSecret(ctx context.Context, externalSecret *externalsecretcrd.ExternalSecret) error {
+	if externalSecret == nil {
+		return fmt.Errorf("external secret is nil")
+	}
+
+	if externalSecret.CreationTimestamp.IsZero() {
+		return s.k8sClient.Create(ctx, externalSecret)
+	}
+
+	return s.k8sClient.Update(ctx, externalSecret)
+}
+
+type inUsingResourceNames []string
+
+func (n inUsingResourceNames) existed(targetName string) bool {
+	for _, name := range n {
+		if name == targetName {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (s *runtimeSyncer) removeExternalSecretOwner(ctx context.Context, owner *eventsourcev1alpha1.EventSource) error {
+	externalSecrets := &externalsecretcrd.ExternalSecretList{}
+	listOpts := []client.ListOption{
+		client.InNamespace(s.config.EventBus.ArgoEvents.Namespace),
+		client.MatchingLabels(s.resouceLabel),
+	}
+	if err := s.k8sClient.List(ctx, externalSecrets, listOpts...); err != nil {
+		return fmt.Errorf("list external secret failed: %w", err)
+	}
+
+	for _, es := range externalSecrets.Items {
+		if utils.IsOwner(owner, &es, scheme) {
+			if err := utils.RemoveOwner(owner, &es, scheme); err != nil {
+				return fmt.Errorf("remove external secret owner failed: %w", err)
+			}
+
+			if err := s.k8sClient.Update(ctx, &es); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *runtimeSyncer) removeExternalSecretExpireOwnerReference(ctx context.Context, owner *eventsourcev1alpha1.EventSource) error {
+	externalSecrets := &externalsecretcrd.ExternalSecretList{}
+	listOpts := []client.ListOption{
+		client.InNamespace(s.config.EventBus.ArgoEvents.Namespace),
+		client.MatchingLabels(s.resouceLabel),
+	}
+	if err := s.k8sClient.List(ctx, externalSecrets, listOpts...); err != nil {
+		return fmt.Errorf("list external secret failed: %w", err)
+	}
+
+	inUsingExternalSecretNames := inUsingResourceNames{}
+	for _, name := range owner.Spec.Gitlab {
+		inUsingExternalSecretNames = append(inUsingExternalSecretNames, name.AccessToken.Name)
+	}
+
+	for _, es := range externalSecrets.Items {
+		if utils.IsOwner(owner, &es, scheme) {
+			if inUsingExternalSecretNames.existed(es.Name) {
+				continue
+			}
+
+			if err := utils.RemoveOwner(owner, &es, scheme); err != nil {
+				return fmt.Errorf("remove external secret owner failed: %w", err)
+			}
+
+			if err := s.k8sClient.Update(ctx, &es); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *runtimeSyncer) deleteUnusedExternalSecrets(ctx context.Context) error {
+	externalSecrets := &externalsecretcrd.ExternalSecretList{}
+	listOpts := []client.ListOption{
+		client.InNamespace(s.config.EventBus.ArgoEvents.Namespace),
+		client.MatchingLabels(s.resouceLabel),
+	}
+	if err := s.k8sClient.List(ctx, externalSecrets, listOpts...); err != nil {
+		return fmt.Errorf("list external secret failed: %w", err)
+	}
+
+	for _, es := range externalSecrets.Items {
+		if len(es.GetOwnerReferences()) == 0 {
+			repoName, ok := es.GetLabels()[labelKeyFromCodeRepo]
+			if !ok {
+				return fmt.Errorf("can not find code repo info from external secret")
+			}
+			isUsed, err := s.codeRepoIsUsed(ctx, repoName, es.Name)
+			if err != nil {
+				return fmt.Errorf("check code repo is used failed: %w", err)
+			}
+
+			if !isUsed {
+				codeRepo := &nautescrd.CodeRepo{}
+				key := types.NamespacedName{
+					Namespace: s.productName,
+					Name:      repoName,
+				}
+				if err := s.tenantK8sClient.Get(ctx, key, codeRepo); err != nil {
+					return fmt.Errorf("get code repo failed: %w", err)
+				}
+
+				if err := s.revokePermissionCodeRepo(ctx, *codeRepo); err != nil {
+					return fmt.Errorf("revoke coderepo permission failed %w", err)
+				}
+			}
+
+			if err := s.k8sClient.Delete(ctx, &es); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *runtimeSyncer) codeRepoIsUsed(ctx context.Context, name string, excludeName string) (bool, error) {
+	externalSecrets := &externalsecretcrd.ExternalSecretList{}
+
+	listOpts := []client.ListOption{
+		client.InNamespace(s.config.EventBus.ArgoEvents.Namespace),
+		client.MatchingLabels(map[string]string{labelKeyFromCodeRepo: name}),
+	}
+
+	if err := s.k8sClient.List(ctx, externalSecrets, listOpts...); err != nil {
+		return true, err
+	}
+
+	isUsed := true
+	switch len(externalSecrets.Items) {
+	case 0:
+		isUsed = false
+	case 1:
+		if externalSecrets.Items[0].Name == excludeName {
+			isUsed = false
+		}
+	}
+	return isUsed, nil
 }
 
 func (s *runtimeSyncer) syncWebhookSecretToken(ctx context.Context, name string, owner client.Object) error {
@@ -238,39 +641,74 @@ func (s *runtimeSyncer) syncWebhookSecretToken(ctx context.Context, name string,
 		Namespace: s.config.EventBus.ArgoEvents.Namespace,
 		Name:      name,
 	}
-
 	if err := s.k8sClient.Get(ctx, key, secretToken); err != nil {
 		if apierrors.IsNotFound(err) {
 			token := uuid.New().String()
-			secretToken := &corev1.Secret{
+			secretToken = &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      key.Name,
 					Namespace: key.Namespace,
+					Labels:    s.resouceLabel,
 				},
 				Data: map[string][]byte{
 					"token": []byte(token),
 				},
 			}
+		} else {
+			return err
+		}
+	}
 
-			err = controllerutil.SetOwnerReference(owner, secretToken, scheme)
-			if err != nil {
-				return fmt.Errorf("can not set secret %s's owner: %w", name, err)
-			}
+	reason, ok := utils.IsLegal(secretToken, s.productName)
+	if !ok {
+		return fmt.Errorf("webhook secret is illegal: %s", reason)
+	}
+
+	if !nautesutil.IsOwner(owner, secretToken, scheme) {
+		if err := controllerutil.SetOwnerReference(owner, secretToken, scheme); err != nil {
+			return fmt.Errorf("set secret token %s's owner faield: %w", name, err)
+		}
+
+		if secretToken.CreationTimestamp.IsZero() {
 			return s.k8sClient.Create(ctx, secretToken)
 		}
+		return s.k8sClient.Update(ctx, secretToken)
+	}
+
+	return nil
+}
+
+func (s *runtimeSyncer) deleteUnUsedSecretsToken(ctx context.Context, owner *eventsourcev1alpha1.EventSource) error {
+	secretList := &corev1.SecretList{}
+	listOpts := []client.ListOption{
+		client.InNamespace(s.config.EventBus.ArgoEvents.Namespace),
+		client.MatchingLabels(s.resouceLabel),
+	}
+	if err := s.k8sClient.List(ctx, secretList, listOpts...); err != nil {
 		return err
 	}
 
-	if nautesutil.IsOwner(owner, secretToken, scheme) {
-		return nil
+	inUsedSecretNames := inUsingResourceNames{}
+	for _, name := range owner.Spec.Gitlab {
+		inUsedSecretNames = append(inUsedSecretNames, name.SecretToken.Name)
 	}
 
-	err := controllerutil.SetOwnerReference(owner, secretToken, scheme)
-	if err != nil {
-		return fmt.Errorf("can not set secret %s's owner: %w", name, err)
+	for _, secret := range secretList.Items {
+		if utils.IsOwner(owner, &secret, scheme) {
+			unUsed := true
+			if inUsedSecretNames.existed(secret.Name) {
+				unUsed = false
+			}
+
+			if unUsed {
+				if err := s.k8sClient.Delete(ctx, &secret); err != nil {
+					return err
+				}
+			}
+		}
 	}
 
-	return s.k8sClient.Update(ctx, secretToken)
+	return nil
 }
 
 func (s *runtimeSyncer) syncEventSourceServiceGitlab(ctx context.Context, name string, owner client.Object, spec corev1.ServiceSpec) error {
@@ -374,7 +812,7 @@ func (s *runtimeSyncer) syncEventSourceIngressGitlab(ctx context.Context, name s
 	needUpdate := false
 	if !nautesutil.IsOwner(owner, ingress, scheme) {
 		if err := controllerutil.SetOwnerReference(owner, ingress, scheme); err != nil {
-			return fmt.Errorf("can not set secret %s's owner: %w", name, err)
+			return fmt.Errorf("set ingress %s's owner failed: %w", name, err)
 		}
 		needUpdate = true
 	}
@@ -458,8 +896,9 @@ func (s *runtimeSyncer) caculateSensorGitlab(ctx context.Context, runtimeTrigger
 		return nil, err
 	}
 
-	vars := copyVars(s.vars)
+	vars := deepCopyStringMap(s.vars)
 	vars[keyEventName] = eventSource.Name
+	vars[keyRepoName] = eventSource.Gitlab.RepoName
 	vars[keyEventSourceType] = string(eventTypeGitlab)
 	vars[keyPipelineName] = runtimeTrigger.Pipeline
 	vars[keyPipelinePath] = pipeline.Path
@@ -594,4 +1033,65 @@ func caculateParameterGitlab(ctx context.Context, runtimeTrigger nautescrd.Pipel
 	paras = append(paras, sourceBranch)
 
 	return paras, nil
+}
+
+func (s *runtimeSyncer) grantPermissionCodeRepo(ctx context.Context, codeRepo nautescrd.CodeRepo) error {
+	providerType, err := getProviderTypeFromCodeRepo(ctx, s.tenantK8sClient, s.config.Nautes.Namespace, codeRepo)
+	if err != nil {
+		return err
+	}
+	secret := interfaces.SecretInfo{
+		Type: interfaces.SECRET_TYPE_GIT,
+		CodeRepo: &interfaces.CodeRepo{
+			ProviderType: providerType,
+			ID:           codeRepo.Name,
+			User:         codeRepoUserDefault,
+			Permission:   interfaces.CodeRepoPermissionAccessToken,
+		},
+	}
+	return s.secClient.GrantPermission(ctx, secret, vaultArgoEventRole, s.cluster.Name)
+}
+
+func (s *runtimeSyncer) revokePermissionCodeRepo(ctx context.Context, codeRepo nautescrd.CodeRepo) error {
+	providerType, err := getProviderTypeFromCodeRepo(ctx, s.tenantK8sClient, s.config.Nautes.Namespace, codeRepo)
+	if err != nil {
+		return err
+	}
+	secret := interfaces.SecretInfo{
+		Type: interfaces.SECRET_TYPE_GIT,
+		CodeRepo: &interfaces.CodeRepo{
+			ProviderType: providerType,
+			ID:           codeRepo.Name,
+			User:         codeRepoUserDefault,
+			Permission:   interfaces.CodeRepoPermissionAccessToken,
+		},
+	}
+	return s.secClient.RevokePermission(ctx, secret, vaultArgoEventRole, s.cluster.Name)
+}
+
+func (s *runtimeSyncer) grantPermissions(ctx context.Context) error {
+	codeRepoNames := inUsingResourceNames{}
+	for _, nautesEventSource := range s.runtime.Spec.EventSources {
+		if nautesEventSource.Gitlab != nil &&
+			!codeRepoNames.existed(nautesEventSource.Gitlab.RepoName) {
+			codeRepoNames = append(codeRepoNames, nautesEventSource.Gitlab.RepoName)
+		}
+	}
+
+	for _, name := range codeRepoNames {
+		codeRepo := &nautescrd.CodeRepo{}
+		key := types.NamespacedName{
+			Namespace: s.productName,
+			Name:      name,
+		}
+		if err := s.tenantK8sClient.Get(ctx, key, codeRepo); err != nil {
+			return err
+		}
+
+		if err := s.grantPermissionCodeRepo(ctx, *codeRepo); err != nil {
+			return fmt.Errorf("grant permission to code repo failed: %w", err)
+		}
+	}
+
+	return nil
 }

@@ -80,7 +80,7 @@ func (s *runtimeSyncer) caculateSensorCalendar(ctx context.Context, runtimeTrigg
 		return nil, err
 	}
 
-	vars := copyVars(s.vars)
+	vars := deepCopyStringMap(s.vars)
 	vars[keyEventName] = eventSource.Name
 	vars[keyEventSourceType] = string(eventTypeCalendar)
 	vars[keyPipelineName] = runtimeTrigger.Pipeline

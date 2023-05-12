@@ -40,6 +40,11 @@ func (s Syncer) SyncEvents(ctx context.Context, task interfaces.RuntimeSyncTask)
 		return nil, fmt.Errorf("create runtime syncer failed: %w", err)
 	}
 
+	err = taskSyncer.InitSecretRepo(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("init secret repo for argo event failed: %w", err)
+	}
+
 	err = taskSyncer.SyncEventSources(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync event source failed: %w", err)

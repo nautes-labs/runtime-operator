@@ -20,11 +20,12 @@ var (
 	tmplDependencyName               = "dependencyName"
 	tmplSensorName                   = "sensorName"
 	tmplTektonInitPipeline           = "tektonInitPipeline"
+	tmplVaultEngineGitAcessTokenPath = "vaultEngineGitAcessTokenPath"
 	nameAndInitPipelineTemplates     = map[string]string{
 		tmplEventSourceGitlab:            "{{ .productName }}-{{ .runtimeName }}-gitlab",
-		tmplEventSourceGitlabEventName:   "{{ .eventName }}",
+		tmplEventSourceGitlabEventName:   "{{ .repoName }}",
 		tmplGitlabAccessToken:            "{{ .productName }}-{{ .runtimeName }}-{{ .repoName }}-accesstoken",
-		tmplGitlabSecretToken:            "{{ .productName }}-{{ .runtimeName }}-gitlab-secrettoken",
+		tmplGitlabSecretToken:            "{{ .productName }}-{{ .runtimeName }}-{{ .eventName }}-secrettoken",
 		tmplGitlabEventSourcePath:        "/{{ .clusterName }}-{{ .productName }}-{{ .runtimeName }}-gitlab",
 		tmplGitlabEndPoint:               "/{{ .clusterName }}-{{ .productName }}-{{ .runtimeName }}-gitlab/{{ .repoName }}",
 		tmplGitlabIngressName:            "{{ .clusterName }}-{{ .productName }}-{{ .runtimeName }}-gitlab",
@@ -34,6 +35,7 @@ var (
 		tmplDependencyName:               "{{ .runtimeName }}-{{ .eventSourceType }}-{{ .eventName }}",
 		tmplTriggerName:                  "{{ .eventName }}-{{ .pipelineName }}-{{ .eventSourceType }}",
 		tmplSensorName:                   "{{ .productName }}-{{ .runtimeName }}",
+		tmplVaultEngineGitAcessTokenPath: "{{ .pipelineRepoProviderType }}/{{ .pipelineRepoID }}/default/accesstoken-api",
 		tmplTektonInitPipeline:           templateTektonInitPipeline,
 	}
 )

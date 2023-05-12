@@ -77,14 +77,15 @@ type runtimeSyncer struct {
 	k8sClient client.Client
 	// tenantK8sClient is a kubernetes client of tenant cluster
 	tenantK8sClient client.Client
-	// resourceLable is a lable will add to the resources whitch doesn't has owner reference
-	resouceLable map[string]string
-	config       nautescfg.Config
-	productName  string
-	runtime      nautescrd.ProjectPipelineRuntime
-	cluster      nautescrd.Cluster
-	pipelineRepo nautescrd.CodeRepo
-	secClient    interfaces.SecretClient
+	// resourceLabel is a label will add to the resources whitch doesn't has owner reference
+	resouceLabel         map[string]string
+	config               nautescfg.Config
+	productName          string
+	runtime              nautescrd.ProjectPipelineRuntime
+	cluster              nautescrd.Cluster
+	pipelineRepo         nautescrd.CodeRepo
+	pipelineRepoProvider nautescrd.CodeRepoProvider
+	secClient            interfaces.SecretClient
 	// vars use to create trigger template or resources names
 	vars map[string]string
 	// webhookURL store the domain of event source, it will be used when eventsource need callback addr, likes gitlab webhook.
@@ -155,12 +156,13 @@ func newRuntimeSyncer(ctx context.Context, task interfaces.RuntimeSyncTask, tena
 	cluster := &runtimeSyncer{
 		k8sClient:             k8sClient,
 		tenantK8sClient:       tenantK8sClient,
-		resouceLable:          task.GetLabel(),
+		resouceLabel:          task.GetLabel(),
 		config:                task.NautesCfg,
 		productName:           task.Product.Name,
 		runtime:               *pipelineRuntime,
 		cluster:               task.Cluster,
 		pipelineRepo:          *pipelineRepo,
+		pipelineRepoProvider:  *provider,
 		secClient:             secClient,
 		vars:                  vars,
 		webhookURL:            url,
@@ -231,7 +233,7 @@ func (s *runtimeSyncer) syncEventSource(ctx context.Context, name string, spec e
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      key.Name,
 					Namespace: key.Namespace,
-					Labels:    s.resouceLable,
+					Labels:    s.resouceLabel,
 				},
 			}
 		} else {
@@ -357,7 +359,7 @@ func (s *runtimeSyncer) syncSensor(ctx context.Context, name string, spec sensor
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      key.Name,
 					Namespace: key.Namespace,
-					Labels:    s.resouceLable,
+					Labels:    s.resouceLabel,
 				},
 			}
 		} else {
@@ -419,6 +421,52 @@ func (s *runtimeSyncer) updateIngress(ctx context.Context, ingress *networkv1.In
 	return s.k8sClient.Update(ctx, ingress)
 }
 
+func (s *runtimeSyncer) InitSecretRepo(ctx context.Context) error {
+	switch s.config.Secret.RepoType {
+	case nautescfg.SECRET_STORE_VAULT:
+		return s.initSecretRepoVault(ctx)
+	default:
+		return fmt.Errorf("secret repo type %s is not supported", s.config.Secret.RepoType)
+	}
+}
+
+const (
+	vaultArgoEventRole = "argoevent"
+)
+
+func (s *runtimeSyncer) initSecretRepoVault(ctx context.Context) error {
+	role := interfaces.Role{
+		Name:   vaultArgoEventRole,
+		Users:  []string{s.config.EventBus.ArgoEvents.TemplateServiceAccount},
+		Groups: []string{s.config.EventBus.ArgoEvents.Namespace},
+	}
+	vaultRole, err := s.secClient.GetRole(ctx, s.cluster.Name, interfaces.Role{
+		Name: vaultArgoEventRole,
+	})
+	if err != nil {
+		return err
+	}
+
+	if vaultRole != nil && reflect.DeepEqual(vaultRole, &role) {
+		return nil
+	}
+
+	return s.secClient.CreateRole(ctx, s.cluster.Name, role)
+}
+
+func getProviderTypeFromCodeRepo(ctx context.Context, client client.Client, nautesNamespace string, repo nautescrd.CodeRepo) (string, error) {
+	provider := &nautescrd.CodeRepoProvider{}
+	key := types.NamespacedName{
+		Namespace: nautesNamespace,
+		Name:      repo.Spec.CodeRepoProvider,
+	}
+	if err := client.Get(ctx, key, provider); err != nil {
+		return "", err
+	}
+
+	return provider.Spec.ProviderType, nil
+}
+
 func getURLFromCodeRepo(ctx context.Context, client client.Client, nautesNamespace string, repo nautescrd.CodeRepo) (string, error) {
 	provider := &nautescrd.CodeRepoProvider{}
 	key := types.NamespacedName{
@@ -441,7 +489,7 @@ func getURLFromCodeRepo(ctx context.Context, client client.Client, nautesNamespa
 	return fmt.Sprintf("%s/%s/%s.git", provider.Spec.SSHAddress, product.Spec.Name, repo.Spec.RepoName), nil
 }
 
-func copyVars(oldMap map[string]string) map[string]string {
+func deepCopyStringMap(oldMap map[string]string) map[string]string {
 	newMap := make(map[string]string)
 	for key, value := range oldMap {
 		newMap[key] = value

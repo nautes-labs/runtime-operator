@@ -23,7 +23,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 )
 
-// IsLegal used to check resources is available for reconcile
+// IsLegal used to check resources is availabel for reconcile.
+// It will return two vars, pass or not and the reason if check is failed.
 func IsLegal(res client.Object, productName string) (string, bool) {
 	if !res.GetDeletionTimestamp().IsZero() {
 		return fmt.Sprintf("resouce %s is terminating", res.GetName()), false

@@ -117,7 +117,7 @@ var _ = Describe("Argoevents", func() {
 		}
 
 		pipelineName := fmt.Sprintf("pipelineName-%s", randNum())
-		evName := fmt.Sprintf("evName-%s", randNum())
+		evName := fmt.Sprintf("ev-name-%s", randNum())
 		runtime = &nautescrd.ProjectPipelineRuntime{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      fmt.Sprintf("pipeline%s", randNum()),
@@ -247,7 +247,7 @@ var _ = Describe("Argoevents", func() {
 				},
 			},
 		}
-		evName := fmt.Sprintf("evName-%s", randNum())
+		evName := fmt.Sprintf("ev-name-%s", randNum())
 		fakeCodeRepos[codeRepo.Name] = codeRepo
 		runtime.Spec.EventSources = append(runtime.Spec.EventSources, nautescrd.EventSource{
 			Name: evName,
@@ -286,7 +286,7 @@ var _ = Describe("Argoevents", func() {
 		err = k8sClient.List(ctx, esList)
 		Expect(err).Should(BeNil())
 		Expect(len(esList.Items)).Should(Equal(1))
-		evName := runtime.Spec.EventSources[0].Name
+		evName := runtime.Spec.EventSources[0].Gitlab.RepoName
 		isSame := reflect.DeepEqual(esList.Items[0].Spec.Gitlab[evName].Events, sourceRepo.Spec.Webhook.Events)
 		Expect(isSame).Should(BeTrue())
 
