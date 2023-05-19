@@ -102,9 +102,22 @@ func (r *ProjectPipelineRuntimeReconciler) Reconcile(ctx context.Context, req ct
 		return ctrl.Result{}, err
 	}
 
-	deployInfo, err := r.Syncer.Sync(ctx, runtime)
-	setPipelineRuntimeStatus(runtime, deployInfo, err)
+	illegalEventSources, err := runtime.Validate(&nautescrd.PipelineRunetimeValidateClientK8s{
+		Client: r.Client,
+	})
+	if err != nil {
+		setPipelineRuntimeStatus(runtime, nil, err)
+		if err := r.Status().Update(ctx, runtime); err != nil {
+			logger.Error(err, "update status failed")
+		}
+		return ctrl.Result{}, err
+	}
 
+	legalRuntime := removeIllegalEventSourceFromRuntime(*runtime, illegalEventSources)
+	deployInfo, err := r.Syncer.Sync(ctx, legalRuntime)
+
+	setPipelineRuntimeStatus(runtime, deployInfo, err)
+	runtime.Status.IllegalEventSources = illegalEventSources
 	if err := r.Status().Update(ctx, runtime); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -119,6 +132,35 @@ func (r *ProjectPipelineRuntimeReconciler) SetupWithManager(mgr ctrl.Manager) er
 		For(&nautescrd.ProjectPipelineRuntime{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Complete(r)
+}
+
+func removeIllegalEventSourceFromRuntime(runtime nautescrd.ProjectPipelineRuntime, illegalEventSources []nautescrd.IllegalEventSource) *nautescrd.ProjectPipelineRuntime {
+	newRuntime := runtime.DeepCopy().DeepCopyObject().(*nautescrd.ProjectPipelineRuntime)
+
+	indexIllegalEventSource := map[string]bool{}
+	for _, illegalEv := range illegalEventSources {
+		indexIllegalEventSource[illegalEv.EventSource.Name] = true
+	}
+
+	legalEventSources := []nautescrd.EventSource{}
+	for _, ev := range newRuntime.Spec.EventSources {
+		if !indexIllegalEventSource[ev.Name] {
+			legalEventSources = append(legalEventSources, ev)
+		}
+	}
+	newRuntime.Spec.EventSources = legalEventSources
+
+	legalTriggers := []nautescrd.PipelineTrigger{}
+	for _, trigger := range newRuntime.Spec.PipelineTriggers {
+		if !indexIllegalEventSource[trigger.EventSource] {
+			legalTriggers = append(legalTriggers, trigger)
+		}
+	}
+	newRuntime.Spec.PipelineTriggers = legalTriggers
+
+	// Set version to 0 to avoid syncer update resource by new runtime
+	newRuntime.ResourceVersion = "0"
+	return newRuntime
 }
 
 func setPipelineRuntimeStatus(runtime *nautescrd.ProjectPipelineRuntime, result *interfaces.DeployInfo, err error) {

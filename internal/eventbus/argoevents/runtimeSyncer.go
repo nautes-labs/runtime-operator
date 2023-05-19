@@ -284,12 +284,13 @@ func (s *runtimeSyncer) SyncSensors(ctx context.Context) error {
 		return fmt.Errorf("calculate sensor failed: %w", err)
 	}
 	if spec == nil {
-		return s.k8sClient.Delete(ctx, &sensorv1alpha1.Sensor{
+		err := s.k8sClient.Delete(ctx, &sensorv1alpha1.Sensor{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      sensorName,
 				Namespace: s.config.EventBus.ArgoEvents.Namespace,
 			},
 		})
+		return client.IgnoreNotFound(err)
 	}
 
 	err = s.syncSensor(ctx, sensorName, *spec)

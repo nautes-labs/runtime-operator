@@ -9,7 +9,7 @@ require (
 	github.com/go-kratos/kratos/v2 v2.5.0
 	github.com/hashicorp/vault/api v1.9.0
 	github.com/hashicorp/vault/api/auth/kubernetes v0.4.0
-	github.com/nautes-labs/pkg v0.2.2-0.20230505105545-86d9802a26d2
+	github.com/nautes-labs/pkg v0.2.2-0.20230515123109-5e050877355a
 	k8s.io/api v0.26.0
 	k8s.io/apimachinery v0.26.0
 	k8s.io/client-go v1.5.2
@@ -124,6 +124,7 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/monochromegane/go-gitignore v0.0.0-20200626010858-205db1a8cc00 // indirect
+	github.com/natefinch/lumberjack v0.0.0-20230119042236-215739b3bcdc // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
