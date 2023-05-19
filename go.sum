@@ -3043,6 +3043,8 @@ sigs.k8s.io/controller-runtime v0.11.0 h1:DqO+c8mywcZLFJWILq4iktoECTyn30Bkj0Cwgq
 sigs.k8s.io/controller-runtime v0.11.0/go.mod h1:KKwLiTooNGu+JmLZGn9Sl3Gjmfj66eMbCQznLP5zcqA=
 sigs.k8s.io/controller-tools v0.8.0/go.mod h1:qE2DXhVOiEq5ijmINcFbqi9GZrrUjzB1TuJU0xa6eoY=
 sigs.k8s.io/controller-tools v0.11.1/go.mod h1:dm4bN3Yp1ZP+hbbeSLF8zOEHsI1/bf15u3JNcgRv2TM=
+sigs.k8s.io/hierarchical-namespaces v0.9.0 h1:GbNkRITpJ8SwnZoO3ZillHDn0D/AySP5Fosa2ZPEol0=
+sigs.k8s.io/hierarchical-namespaces v0.9.0/go.mod h1:qHqqjgYqzMPg7BwpkndOkK7dwmzBdUj0tvSSrmQzouk=
 sigs.k8s.io/hierarchical-namespaces v1.0.0 h1:rgfkknTEFhAF/28p1sKdiJqUa+OvvNQ20rlyFGIRaro=
 sigs.k8s.io/hierarchical-namespaces v1.0.0/go.mod h1:zqfhmqEdCUY2S75WsrmfPPu+ns35522mBDkqaHNjrSs=
 sigs.k8s.io/json v0.0.0-20211208200746-9f7c6b3444d2 h1:kDi4JBNAsJWfz1aEXhO8Jg87JJaPNLh5tIzYHgStQ9Y=

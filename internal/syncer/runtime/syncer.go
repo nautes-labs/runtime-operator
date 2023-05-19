@@ -93,13 +93,18 @@ func (s *Syncer) Sync(ctx context.Context, runtime interfaces.Runtime) (*interfa
 			return nil, fmt.Errorf("deploy app failed: %w", err)
 		}
 	case interfaces.RUNTIME_TYPE_PIPELINE:
-		EventBusApp, err := getEventBusApp(ctx, string(cluster.Spec.ClusterKind), cfg)
+		eventBusApp, err := getEventBusApp(ctx, string(cluster.Spec.ClusterKind), cfg)
 		if err != nil {
 			return nil, err
 		}
-		deployInfo, err = EventBusApp.SyncEvents(ctx, *deployTask)
+		deployInfo, err = eventBusApp.SyncEvents(ctx, *deployTask)
 		if err != nil {
 			return nil, fmt.Errorf("sync event failed: %w", err)
+		}
+		pipelineApp, err := getPipelineApp(ctx, string(cluster.Spec.ClusterKind), cfg)
+		err = pipelineApp.DeployPipelineRuntime(ctx, *deployTask)
+		if err != nil {
+			return nil, fmt.Errorf("sync pipeline runtime failed: %w", err)
 		}
 	}
 	return deployInfo, nil

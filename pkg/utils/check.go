@@ -26,14 +26,21 @@ import (
 // IsLegal used to check resources is availabel for reconcile.
 // It will return two vars, pass or not and the reason if check is failed.
 func IsLegal(res client.Object, productName string) (string, bool) {
+	if err := CheckResourceOperability(res, productName); err != nil {
+		return err.Error(), false
+	}
+	return "", true
+}
+
+func CheckResourceOperability(res client.Object, productName string) error {
 	if !res.GetDeletionTimestamp().IsZero() {
-		return fmt.Sprintf("resouce %s is terminating", res.GetName()), false
+		return fmt.Errorf("resouce %s is terminating", res.GetName())
 	}
 
 	if !IsBelongsToProduct(res, productName) {
-		return fmt.Sprintf("resource %s is not belongs to product", res.GetName()), false
+		return fmt.Errorf("resource %s is not belongs to product", res.GetName())
 	}
-	return "", true
+	return nil
 }
 
 // IsBelongsToProduct check resouces is maintain by nautes

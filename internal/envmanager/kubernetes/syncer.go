@@ -63,7 +63,19 @@ func (m Syncer) Sync(ctx context.Context, task interfaces.RuntimeSyncTask) (*int
 		return nil, fmt.Errorf("create dest cluster client failed: %w", err)
 	}
 
-	if err := destCluster.syncProductNamespace(ctx); err != nil {
+	coderepoList := &nautescrd.CodeRepoList{}
+	listOpts := []client.ListOption{
+		client.MatchingLabels(map[string]string{nautescrd.LABEL_FROM_PRODUCT: task.Product.Name}),
+		client.InNamespace(task.NautesCfg.Nautes.Namespace),
+	}
+	if err := m.Client.List(ctx, coderepoList, listOpts...); err != nil {
+		return nil, fmt.Errorf("get product %s code repo failed: %w", task.Product.Name, err)
+	}
+	if len(coderepoList.Items) != 1 {
+		return nil, fmt.Errorf("product %s code repo is not unique", task.Product.Name)
+	}
+	productCodeRepo := coderepoList.Items[0]
+	if err := destCluster.syncProductNamespace(ctx, &productCodeRepo); err != nil {
 		return nil, fmt.Errorf("sync product namespace failed: %w", err)
 	}
 
@@ -71,7 +83,7 @@ func (m Syncer) Sync(ctx context.Context, task interfaces.RuntimeSyncTask) (*int
 		return nil, fmt.Errorf("sync product authority failed: %w", err)
 	}
 
-	if err := destCluster.syncRuntimeNamespace(ctx); err != nil {
+	if err := destCluster.syncRuntimeNamespace(ctx, nil); err != nil {
 		return nil, fmt.Errorf("sync runtime namespace failed: %w", err)
 	}
 
@@ -79,25 +91,15 @@ func (m Syncer) Sync(ctx context.Context, task interfaces.RuntimeSyncTask) (*int
 		return nil, fmt.Errorf("sync relationship namespace failed: %w", err)
 	}
 
-	if err := destCluster.SyncRole(ctx); err != nil {
-		return nil, fmt.Errorf("sync role failed: %w", err)
+	syncResult := &interfaces.EnvSyncResult{}
+	repos, err := m.getRepos(ctx, task)
+	if err != nil {
+		syncResult.Error = err
 	}
 
-	syncResult := &interfaces.EnvSyncResult{}
-	switch task.RuntimeType {
-	case interfaces.RUNTIME_TYPE_DEPLOYMENT:
-		repos, err := m.getRepos(ctx, task)
-		if err != nil {
-			syncResult.Error = err
-			break
-		}
-
-		err = destCluster.SyncRepo(ctx, repos)
-		if err != nil {
-			syncResult.Error = err
-			break
-		}
-
+	err = destCluster.SyncRepo(ctx, repos)
+	if err != nil {
+		syncResult.Error = err
 	}
 
 	return syncResult, nil
@@ -112,11 +114,7 @@ func (m Syncer) Remove(ctx context.Context, task interfaces.RuntimeSyncTask) err
 		return fmt.Errorf("create dest cluster client failed: %w", err)
 	}
 
-	if err := destCluster.DeleteRole(ctx); err != nil {
-		return fmt.Errorf("delete role failed: %w", err)
-	}
-
-	if err := destCluster.deleteNamespace(ctx); err != nil {
+	if err := destCluster.deleteNamespace(ctx, task.Runtime.GetName()); err != nil {
 		return fmt.Errorf("delete runtime namespace failed: %w", err)
 	}
 

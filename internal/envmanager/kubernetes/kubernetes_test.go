@@ -49,6 +49,7 @@ var _ = Describe("EnvManager", func() {
 	var productNamespaceIsTerminating bool
 	var artifactRepos []nautescrd.ArtifactRepo
 
+	var productCodeRepo *nautescrd.CodeRepo
 	var task interfaces.RuntimeSyncTask
 	BeforeEach(func() {
 		productName = fmt.Sprintf("test-project-%s", randNum())
@@ -64,6 +65,22 @@ var _ = Describe("EnvManager", func() {
 			},
 		})
 		Expect(err).Should(BeNil())
+
+		productCodeRepo = &nautescrd.CodeRepo{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("repo-%s", randNum()),
+				Namespace: "nautes",
+			},
+			Spec: nautescrd.CodeRepoSpec{
+				CodeRepoProvider: "test",
+				Product:          productName,
+				Project:          "",
+				RepoName:         artifactRepoName,
+				URL:              "ssh://127.0.0.1/test/default.project.git",
+			},
+		}
+
+		mockK8SClient.CodeRepos = []nautescrd.CodeRepo{*productCodeRepo}
 
 		baseRuntime = &nautescrd.DeploymentRuntime{
 			ObjectMeta: metav1.ObjectMeta{

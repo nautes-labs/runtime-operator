@@ -14,7 +14,7 @@ require (
 	k8s.io/apimachinery v0.26.0
 	k8s.io/client-go v1.5.2
 	k8s.io/kubectl v0.23.1
-	sigs.k8s.io/hierarchical-namespaces v1.0.0
+	sigs.k8s.io/hierarchical-namespaces v0.9.0
 )
 
 require (
