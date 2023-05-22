@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
 	configs "github.com/nautes-labs/pkg/pkg/nautesconfigs"
+	"github.com/nautes-labs/runtime-operator/pkg/constant"
 	interfaces "github.com/nautes-labs/runtime-operator/pkg/interface"
 	"github.com/nautes-labs/runtime-operator/pkg/utils"
 	nautesutil "github.com/nautes-labs/runtime-operator/pkg/utils"
@@ -298,39 +299,23 @@ func (s *runtimeSyncer) syncGitlabAccessToken(ctx context.Context, name, repoNam
 }
 
 func (s *runtimeSyncer) syncSecretStore(ctx context.Context, name string) error {
-	secStore := &externalsecretcrd.SecretStore{}
-	key := types.NamespacedName{
-		Namespace: s.config.EventBus.ArgoEvents.Namespace,
-		Name:      name,
+	secStore := &externalsecretcrd.SecretStore{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: s.config.EventBus.ArgoEvents.Namespace,
+		},
 	}
-	if err := s.k8sClient.Get(ctx, key, secStore); err != nil {
-		if apierrors.IsNotFound(err) {
-			secStore = &externalsecretcrd.SecretStore{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      key.Name,
-					Namespace: key.Namespace,
-				},
-			}
-		} else {
-			return err
+
+	_, err := controllerutil.CreateOrUpdate(ctx, s.k8sClient, secStore, func() error {
+		spec, err := s.caculateSecretStore()
+		if err != nil {
+			return fmt.Errorf("get secret store %s's spec failed: %w", name, err)
 		}
-	}
-
-	if secStore.DeletionTimestamp != nil && !secStore.DeletionTimestamp.IsZero() {
-		return fmt.Errorf("secret store %s is terminating", name)
-	}
-
-	spec, err := s.caculateSecretStore()
-	if err != nil {
-		return fmt.Errorf("get secret store %s's spec failed: %w", name, err)
-	}
-
-	if reflect.DeepEqual(secStore.Spec, *spec) {
 		secStore.Spec = *spec
-		return s.updateSecretStore(ctx, secStore)
-	}
+		return nil
+	})
 
-	return nil
+	return err
 }
 
 func (s *runtimeSyncer) caculateSecretStore() (*externalsecretcrd.SecretStoreSpec, error) {
@@ -359,9 +344,9 @@ func (s *runtimeSyncer) caculateSecretProviderVault() *externalsecretcrd.VaultPr
 			Kubernetes: &externalsecretcrd.VaultKubernetesAuth{
 				Path: s.cluster.Name,
 				ServiceAccountRef: &esmetav1.ServiceAccountSelector{
-					Name: s.config.EventBus.ArgoEvents.TemplateServiceAccount,
+					Name: constant.ServiceAccountDefault,
 				},
-				Role: s.runtime.Name,
+				Role: vaultArgoEventRole,
 			},
 		},
 		Server:  s.config.Secret.Vault.Addr,

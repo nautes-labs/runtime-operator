@@ -69,7 +69,7 @@ rules:
 - apiGroups:
   - nautes.resource.nautes.io
   resources:
-  - coderepbindings
+  - coderepobindings
   verbs:
   - get
   - list

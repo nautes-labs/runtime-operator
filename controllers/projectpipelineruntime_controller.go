@@ -44,7 +44,7 @@ type ProjectPipelineRuntimeReconciler struct {
 //+kubebuilder:rbac:groups=nautes.resource.nautes.io,resources=projectpipelineruntimes,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=nautes.resource.nautes.io,resources=projectpipelineruntimes/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=nautes.resource.nautes.io,resources=projectpipelineruntimes/finalizers,verbs=update
-//+kubebuilder:rbac:groups=nautes.resource.nautes.io,resources=coderepbindings,verbs=get;list;watch
+//+kubebuilder:rbac:groups=nautes.resource.nautes.io,resources=coderepobindings,verbs=get;list;watch
 //+kubebuilder:rbac:groups=nautes.resource.nautes.io,resources=coderepoes,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to

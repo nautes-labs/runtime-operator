@@ -27,11 +27,13 @@ import (
 
 	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
 	nautescfg "github.com/nautes-labs/pkg/pkg/nautesconfigs"
+	"github.com/nautes-labs/runtime-operator/pkg/constant"
 	runtimecontext "github.com/nautes-labs/runtime-operator/pkg/context"
 	interfaces "github.com/nautes-labs/runtime-operator/pkg/interface"
 	"github.com/nautes-labs/runtime-operator/pkg/utils"
 	corev1 "k8s.io/api/core/v1"
 	networkv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -438,7 +440,7 @@ const (
 func (s *runtimeSyncer) initSecretRepoVault(ctx context.Context) error {
 	role := interfaces.Role{
 		Name:   vaultArgoEventRole,
-		Users:  []string{s.config.EventBus.ArgoEvents.TemplateServiceAccount},
+		Users:  []string{constant.ServiceAccountDefault},
 		Groups: []string{s.config.EventBus.ArgoEvents.Namespace},
 	}
 	vaultRole, err := s.secClient.GetRole(ctx, s.cluster.Name, interfaces.Role{
@@ -448,7 +450,7 @@ func (s *runtimeSyncer) initSecretRepoVault(ctx context.Context) error {
 		return err
 	}
 
-	if vaultRole != nil && reflect.DeepEqual(vaultRole, &role) {
+	if vaultRole != nil && equality.Semantic.DeepEqual(*vaultRole, role) {
 		return nil
 	}
 
