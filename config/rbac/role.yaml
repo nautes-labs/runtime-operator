@@ -69,6 +69,14 @@ rules:
 - apiGroups:
   - nautes.resource.nautes.io
   resources:
+  - coderepbindings
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - nautes.resource.nautes.io
+  resources:
   - coderepoes
   verbs:
   - get
