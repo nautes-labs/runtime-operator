@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/nautes-labs/runtime-operator/pkg/constant"
 	interfaces "github.com/nautes-labs/runtime-operator/pkg/interface"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -239,7 +238,7 @@ func (c *destCluster) syncRoleBinding(ctx context.Context) error {
 			},
 			{
 				Kind: userRoleKind,
-				Name: constant.ServiceAccountDefault,
+				Name: c.task.ServiceAccountName,
 			},
 		}
 		return nil

@@ -20,8 +20,10 @@ import (
 
 	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
 	nautescfg "github.com/nautes-labs/pkg/pkg/nautesconfigs"
+	"github.com/nautes-labs/runtime-operator/pkg/constant"
 	runtimecontext "github.com/nautes-labs/runtime-operator/pkg/context"
 	interfaces "github.com/nautes-labs/runtime-operator/pkg/interface"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -57,6 +59,16 @@ func (s *Syncer) Sync(ctx context.Context, runtime interfaces.Runtime) (*interfa
 		return nil, fmt.Errorf("get cluster info failed: %w", err)
 	}
 
+	var hostCluster *nautescrd.Cluster
+	if cluster.Spec.ClusterType == nautescrd.CLUSTER_TYPE_VIRTUAL {
+		hostCluster = &nautescrd.Cluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      cluster.Spec.HostCluster,
+				Namespace: cluster.Namespace,
+			},
+		}
+	}
+
 	envManager, ok := EnvManagers[cluster.Spec.ClusterKind]
 	if !ok {
 		return nil, fmt.Errorf("cluster provider %s is not support", cluster.Spec.ClusterKind)
@@ -70,6 +82,7 @@ func (s *Syncer) Sync(ctx context.Context, runtime interfaces.Runtime) (*interfa
 	deployTask, err := s.createDeployTask(cfg, runtime, func(t *interfaces.RuntimeSyncTask) {
 		t.AccessInfo = *accessInfo
 		t.Cluster = *cluster
+		t.HostCluster = hostCluster
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create deploy task failed: %w", err)
@@ -102,8 +115,7 @@ func (s *Syncer) Sync(ctx context.Context, runtime interfaces.Runtime) (*interfa
 			return nil, fmt.Errorf("sync event failed: %w", err)
 		}
 		pipelineApp, err := getPipelineApp(ctx, string(cluster.Spec.ClusterKind), cfg)
-		err = pipelineApp.DeployPipelineRuntime(ctx, *deployTask)
-		if err != nil {
+		if err := pipelineApp.DeployPipelineRuntime(ctx, *deployTask); err != nil {
 			return nil, fmt.Errorf("sync pipeline runtime failed: %w", err)
 		}
 	}
@@ -159,6 +171,10 @@ func (s *Syncer) Delete(ctx context.Context, runtime interfaces.Runtime) error {
 		err = EventBusApp.RemoveEvents(ctx, *deployTask)
 		if err != nil {
 			return fmt.Errorf("sync event failed: %w", err)
+		}
+		pipelineApp, err := getPipelineApp(ctx, string(cluster.Spec.ClusterKind), cfg)
+		if err := pipelineApp.UnDeployPipelineRuntime(ctx, *deployTask); err != nil {
+			return fmt.Errorf("sync pipeline runtime failed: %w", err)
 		}
 	}
 
@@ -216,10 +232,11 @@ func (s *Syncer) createDeployTask(cfg nautescfg.Config, runtime interfaces.Runti
 	}
 
 	task := &interfaces.RuntimeSyncTask{
-		Product:     *product,
-		NautesCfg:   cfg,
-		Runtime:     runtime,
-		RuntimeType: runtimeType,
+		Product:            *product,
+		NautesCfg:          cfg,
+		Runtime:            runtime,
+		RuntimeType:        runtimeType,
+		ServiceAccountName: constant.ServiceAccountDefault,
 	}
 
 	for _, fn := range opts {

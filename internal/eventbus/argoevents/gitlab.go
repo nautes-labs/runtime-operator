@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -37,6 +38,15 @@ const (
 
 const (
 	labelKeyFromCodeRepo = "coderepo-name"
+)
+
+var (
+	gitlabWebhookEventMapping = map[string]string{
+		"push":          "PushEvents",
+		"tag_push":      "TagPushEvents",
+		"merge_request": "MergeRequestsEvents",
+		"issue":         "IssuesEvents",
+	}
 )
 
 // syncEventSourceGitlab is used to create gitlab type argo events eventsource and the related resources that ensure its normal operation.
@@ -242,6 +252,10 @@ func (s *runtimeSyncer) calculateEventSourceGitlab(ctx context.Context, eventSou
 		if err != nil {
 			return nil, err
 		}
+		webhookEvents, err := getEventsFromCodeRepo(codeRepo.Spec.Webhook.Events)
+		if err != nil {
+			return nil, err
+		}
 
 		eventSourceSpec.Gitlab[eventName] = eventsourcev1alpha1.GitlabEventSource{
 			Webhook: &eventsourcev1alpha1.WebhookContext{
@@ -250,7 +264,7 @@ func (s *runtimeSyncer) calculateEventSourceGitlab(ctx context.Context, eventSou
 				Port:     strconv.Itoa(int(eventSourcePort)),
 				URL:      s.webhookURL,
 			},
-			Events: codeRepo.Spec.Webhook.Events,
+			Events: webhookEvents,
 			AccessToken: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{
 					Name: accessTokenName,
@@ -275,6 +289,18 @@ func (s *runtimeSyncer) calculateEventSourceGitlab(ctx context.Context, eventSou
 	}
 
 	return eventSourceSpec, nil
+}
+
+func getEventsFromCodeRepo(events []string) ([]string, error) {
+	webhookEvents := []string{}
+	for _, ev := range events {
+		webhookEvent, ok := gitlabWebhookEventMapping[ev]
+		if !ok {
+			return nil, fmt.Errorf("event %s is unsupported", ev)
+		}
+		webhookEvents = append(webhookEvents, webhookEvent)
+	}
+	return webhookEvents, nil
 }
 
 const secretStoreName = "git-secret-store"
@@ -887,6 +913,7 @@ func (s *runtimeSyncer) caculateSensorGitlab(ctx context.Context, runtimeTrigger
 	vars[keyEventSourceType] = string(eventTypeGitlab)
 	vars[keyPipelineName] = runtimeTrigger.Pipeline
 	vars[keyPipelinePath] = pipeline.Path
+	vars[keyPipelineLabel] = pipeline.Label
 	vars[keyIsCodeRepoTrigger] = "true"
 
 	dependency, err := s.caculateDependencyGitlab(ctx, *eventSource, vars)
@@ -939,7 +966,7 @@ func (s *runtimeSyncer) caculateDependencyGitlab(ctx context.Context, event naut
 	}
 
 	if event.Gitlab.Revision != "" {
-		dependency.Filters.Script = fmt.Sprintf("if string.match(event.body.ref, \"refs\\/heads\\/%s\") then return true else return false end", event.Gitlab.Revision)
+		dependency.Filters.Script = fmt.Sprintf("if string.match(event.body.ref, \"%s\") then return true else return false end", event.Gitlab.Revision)
 	}
 
 	return &dependency, nil
@@ -979,7 +1006,13 @@ func (s *runtimeSyncer) caculateTriggerGitlab(ctx context.Context, runtimeTrigge
 	if err != nil {
 		return nil, err
 	}
-	resource := common.NewResource(initPipeline)
+
+	var inter map[string]interface{}
+	if err := yaml.Unmarshal([]byte(initPipeline), &inter); err != nil {
+		return nil, err
+	}
+
+	resource := common.NewResource(inter)
 	trigger.Template.K8s.Source = &sensorv1alpha1.ArtifactLocation{
 		Resource: &resource,
 	}

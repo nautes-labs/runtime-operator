@@ -63,19 +63,11 @@ func (m Syncer) Sync(ctx context.Context, task interfaces.RuntimeSyncTask) (*int
 		return nil, fmt.Errorf("create dest cluster client failed: %w", err)
 	}
 
-	coderepoList := &nautescrd.CodeRepoList{}
-	listOpts := []client.ListOption{
-		client.MatchingLabels(map[string]string{nautescrd.LABEL_FROM_PRODUCT: task.Product.Name}),
-		client.InNamespace(task.NautesCfg.Nautes.Namespace),
+	productCodeRepo, err := getProductCodeRepo(ctx, m.Client, task.Product.Name, task.NautesCfg.Nautes.Namespace)
+	if err != nil {
+		return nil, fmt.Errorf("get product coderepo failed: %w", err)
 	}
-	if err := m.Client.List(ctx, coderepoList, listOpts...); err != nil {
-		return nil, fmt.Errorf("get product %s code repo failed: %w", task.Product.Name, err)
-	}
-	if len(coderepoList.Items) != 1 {
-		return nil, fmt.Errorf("product %s code repo is not unique", task.Product.Name)
-	}
-	productCodeRepo := coderepoList.Items[0]
-	if err := destCluster.syncProductNamespace(ctx, &productCodeRepo); err != nil {
+	if err := destCluster.syncProductNamespace(ctx, productCodeRepo); err != nil {
 		return nil, fmt.Errorf("sync product namespace failed: %w", err)
 	}
 
@@ -124,7 +116,12 @@ func (m Syncer) Remove(ctx context.Context, task interfaces.RuntimeSyncTask) err
 	}
 	if deletable {
 		logger.V(1).Info("threre are no namespace under product namespace , it will be delete", "NamespaceName", task.Product.Name)
-		if err := destCluster.deleteProductNamespace(ctx); err != nil {
+
+		productCodeRepo, err := getProductCodeRepo(ctx, m.Client, task.Product.Name, task.NautesCfg.Nautes.Namespace)
+		if err != nil {
+			return fmt.Errorf("get product coderepo failed: %w", err)
+		}
+		if err := destCluster.deleteProductNamespace(ctx, productCodeRepo); err != nil {
 			return fmt.Errorf("delete product namespace failed: %w", err)
 		}
 	}
@@ -165,4 +162,21 @@ func (m Syncer) getRepos(ctx context.Context, task interfaces.RuntimeSyncTask) (
 	}
 
 	return repos, nil
+}
+
+func getProductCodeRepo(ctx context.Context, k8sClient client.Client, productName, nautesNamespace string) (*nautescrd.CodeRepo, error) {
+	coderepoList := &nautescrd.CodeRepoList{}
+	listOpts := []client.ListOption{
+		client.MatchingLabels(map[string]string{nautescrd.LABEL_FROM_PRODUCT: productName}),
+		client.InNamespace(nautesNamespace),
+	}
+	if err := k8sClient.List(ctx, coderepoList, listOpts...); err != nil {
+		return nil, fmt.Errorf("get product %s code repo failed: %w", productName, err)
+	}
+	if len(coderepoList.Items) != 1 {
+		return nil, fmt.Errorf("product %s code repo is not unique", productName)
+	}
+	productCodeRepo := coderepoList.Items[0]
+
+	return &productCodeRepo, nil
 }

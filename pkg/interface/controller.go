@@ -34,11 +34,14 @@ type RuntimeSyncTask struct {
 	// Product store the runtime's product resource.
 	Product nautescrd.Product
 	// Cluster store runtime's cluster resource.
-	Cluster   nautescrd.Cluster
-	NautesCfg nautescfg.Config
+	Cluster     nautescrd.Cluster
+	HostCluster *nautescrd.Cluster
+	NautesCfg   nautescfg.Config
 	// Runtime is the runtime resource of this sync, it chould be pipeline runtime or deployment runtime.
 	Runtime     Runtime
 	RuntimeType RuntimeType
+	// ServiceAccountName is the authorized account name in k8s, it can get secrets from secret store, create resource in runtime namespace, etc.
+	ServiceAccountName string
 }
 
 func (t *RuntimeSyncTask) GetLabel() map[string]string {

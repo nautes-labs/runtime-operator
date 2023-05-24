@@ -2,7 +2,7 @@ package argoevents
 
 import (
 	"bytes"
-	"html/template"
+	"text/template"
 )
 
 var (
@@ -53,6 +53,8 @@ var (
 	keyPipelineRepoURL          = "pipelineRepoURL"
 	keyPipelinePath             = "pipelinePath"
 	keyIsCodeRepoTrigger        = "isCodeRepoTrigger"
+	keyPipelineLabel            = "pipelineLabel"
+	keyServiceAccountName       = "serviceAccountName"
 )
 
 type eventType string
@@ -76,11 +78,11 @@ func getStringFromTemplate(templateName string, vars interface{}) (string, error
 	return path.String(), nil
 }
 
-var templateTektonInitPipeline = `
-apiVersion: tekton.dev/v1beta1
+var templateTektonInitPipeline = `apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
 metadata:
   generateName: init-pipiline-
+  namespace: {{ .runtimeName }}
 spec:
   params:
     - name: PIPELINE-REVISION
@@ -93,6 +95,7 @@ spec:
       value: {{ .pipelinePath }}
   taskRunSpecs:
     - pipelineTaskName: git-clone
+      taskServiceAccountName: {{ .serviceAccountName }}
       metadata:
         annotations:
           vault.hashicorp.com/agent-inject: 'true'
@@ -109,12 +112,15 @@ spec:
             {{ "{{-" }} with secret "git/data/{{ .pipelineRepoProviderType }}/{{ .pipelineRepoID }}/default/readonly" {{ "-}}" }}
             {{ "{{" }} .Data.data.deploykey {{ "}}" }}
             {{ "{{-" }} end {{ "-}}" }}
+    - pipelineTaskName: pipeline-run
+      taskServiceAccountName: {{ .serviceAccountName }}
   pipelineSpec:
     params:
       - name: PIPELINE-REVISION
       {{- if eq .isCodeRepoTrigger "true" }}
       - name: REVISION
       {{- end }}
+      - name: runfile
     tasks:
       - name: git-clone
         taskRef:
@@ -140,31 +146,33 @@ spec:
           - name: script
             value: |
               SUFFIX=` + "`openssl rand -hex 2`" + `
-		      {{- if eq .isCodeRepoTrigger "true" }}
-              REF=$(params.REVISION)
-              BRANCH=${REF/refs\/heads\//}
-      		  {{- end }}
-
               cat > ./kustomization.yaml << EOF
               apiVersion: kustomize.config.k8s.io/v1beta1
               kind: Kustomization
               resources:
               - $(params.runfile)
-              nameSuffix: -${SUFFIX}
-      		  {{- if eq .isCodeRepoTrigger "true" }}
+              nameSuffix: -n${SUFFIX}
+              {{- if .pipelineLabel }}
               commonLabels:
-                branch: $BRANCH
+                nautes-pipeline-selector: {{ .pipelineLabel }}
+              {{ end }}
+              {{- if eq .isCodeRepoTrigger "true" }}
               patches:
               - patch: |-
-                - op: replace
-                  path: /spec/params/0/value
-                  value: $(params.REVISION)
+                  - op: replace
+                    path: /spec/params/0/value
+                    value: $(params.REVISION)
                 target:
-                kind: PipelineRun
-      		  {{- end }}
+                  kind: PipelineRun
+              {{- end }}
               EOF
               cat ./kustomization.yaml
               kubectl kustomize . | kubectl -n {{ .runtimeName }} create -f -
+        workspaces:
+          - name: manifest-dir
+            workspace: source-volume
+    workspaces:
+      - name: source-volume
   workspaces:
     - name: source-volume
       volumeClaimTemplate:
@@ -173,5 +181,5 @@ spec:
             - ReadWriteOnce
           resources:
             requests:
-            storage: 10M
+              storage: 10M
 `

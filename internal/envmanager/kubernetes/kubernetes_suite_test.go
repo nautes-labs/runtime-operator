@@ -35,6 +35,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -121,6 +122,12 @@ secret:
 	secClient, err := secprovider.GetSecretClient(ctx)
 	Expect(err).Should(BeNil())
 	ctx = runtimecontext.NewSecretClientContext(ctx, secClient)
+
+	k8sClient.Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "nautes",
+		},
+	})
 
 	mockK8SClient = &mockClient{}
 

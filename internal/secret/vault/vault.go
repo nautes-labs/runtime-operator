@@ -48,6 +48,7 @@ type Vault struct {
 	vaultproxy.SecretHTTPClient
 	vaultproxy.AuthHTTPClient
 	vaultproxy.AuthGrantHTTPClient
+	caBundle             string
 	getDBName            map[runtimeinterface.SecretType]string
 	getKeyFunc           map[runtimeinterface.SecretType]getSecretKey
 	grantPermissionFunc  map[runtimeinterface.SecretType]grantPermission
@@ -211,6 +212,10 @@ func (s *Vault) revokePermissionGit(ctx context.Context, repo runtimeinterface.S
 	return err
 }
 
+func (s *Vault) GetCABundle(ctx context.Context) (string, error) {
+	return s.caBundle, nil
+}
+
 func NewClient(cfg nautescfg.SecretRepo) (runtimeinterface.SecretClient, error) {
 	vaultClient, err := newVaultClient(cfg)
 	if err != nil {
@@ -226,6 +231,7 @@ func NewClient(cfg nautescfg.SecretRepo) (runtimeinterface.SecretClient, error) 
 		SecretHTTPClient:    secClient,
 		AuthHTTPClient:      authClient,
 		AuthGrantHTTPClient: grantClient,
+		caBundle:            cfg.Vault.CABundle,
 	}
 
 	client.getDBName = map[runtimeinterface.SecretType]string{

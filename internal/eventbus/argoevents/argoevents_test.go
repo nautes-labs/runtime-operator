@@ -12,6 +12,7 @@ import (
 	sensorv1alpha1 "github.com/argoproj/argo-events/pkg/apis/sensor/v1alpha1"
 	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
 	"github.com/nautes-labs/runtime-operator/internal/eventbus/argoevents"
+	"github.com/nautes-labs/runtime-operator/pkg/constant"
 	interfaces "github.com/nautes-labs/runtime-operator/pkg/interface"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -98,7 +99,7 @@ var _ = Describe("Argoevents", func() {
 				PipelineRuntime:   false,
 				Webhook: &nautescrd.Webhook{
 					Events: []string{
-						"PushEvents",
+						"push",
 					},
 				},
 			},
@@ -141,7 +142,7 @@ var _ = Describe("Argoevents", func() {
 							RepoName: sourceRepo.Name,
 							Revision: "main",
 							Events: []string{
-								"PushEvents",
+								"push",
 							},
 						},
 					},
@@ -162,12 +163,13 @@ var _ = Describe("Argoevents", func() {
 		}
 
 		task = interfaces.RuntimeSyncTask{
-			AccessInfo:  accessInfo,
-			Product:     product,
-			Cluster:     cluster,
-			NautesCfg:   *nautesCFG,
-			Runtime:     runtime,
-			RuntimeType: interfaces.RUNTIME_TYPE_PIPELINE,
+			AccessInfo:         accessInfo,
+			Product:            product,
+			Cluster:            cluster,
+			NautesCfg:          *nautesCFG,
+			Runtime:            runtime,
+			RuntimeType:        interfaces.RUNTIME_TYPE_PIPELINE,
+			ServiceAccountName: constant.ServiceAccountDefault,
 		}
 
 		syncer = argoevents.NewSyncer(mockK8SClient)
@@ -243,7 +245,7 @@ var _ = Describe("Argoevents", func() {
 				DeploymentRuntime: false,
 				PipelineRuntime:   false,
 				Webhook: &nautescrd.Webhook{
-					Events: []string{"PushEvents"},
+					Events: []string{"push"},
 				},
 			},
 		}
@@ -287,7 +289,7 @@ var _ = Describe("Argoevents", func() {
 		Expect(err).Should(BeNil())
 		Expect(len(esList.Items)).Should(Equal(1))
 		evName := runtime.Spec.EventSources[0].Gitlab.RepoName
-		isSame := reflect.DeepEqual(esList.Items[0].Spec.Gitlab[evName].Events, sourceRepo.Spec.Webhook.Events)
+		isSame := reflect.DeepEqual(esList.Items[0].Spec.Gitlab[evName].Events, []string{"PushEvents"})
 		Expect(isSame).Should(BeTrue())
 
 		sensorList := &sensorv1alpha1.SensorList{}
@@ -399,4 +401,88 @@ var _ = Describe("Argoevents", func() {
 		err = syncer.RemoveEvents(ctx, task2)
 		Expect(err).Should(BeNil())
 	})
+})
+
+var _ = Describe("Test func GetURLFromCluster", func() {
+	var cluster nautescrd.Cluster
+	var hostCluster *nautescrd.Cluster
+	var isSecret bool
+	BeforeEach(func() {
+		hostCluster = &nautescrd.Cluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: fmt.Sprintf("host-cluster-%s", randNum()),
+			},
+			Spec: nautescrd.ClusterSpec{
+				PrimaryDomain: "nautes.io",
+			},
+		}
+		cluster = nautescrd.Cluster{
+			TypeMeta: metav1.TypeMeta{},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: fmt.Sprintf("cluster-%s", randNum()),
+			},
+			Spec: nautescrd.ClusterSpec{
+				ApiServer:     "https://127.0.0.1:6443",
+				ClusterType:   nautescrd.CLUSTER_TYPE_VIRTUAL,
+				ClusterKind:   nautescrd.CLUSTER_KIND_KUBERNETES,
+				Usage:         nautescrd.CLUSTER_USAGE_WORKER,
+				HostCluster:   hostCluster.Name,
+				PrimaryDomain: "cluster.io",
+			},
+			Status: nautescrd.ClusterStatus{
+				EntryPoints: map[string]nautescrd.ClusterEntryPoint{
+					"test": {
+						HTTPPort:  80,
+						HTTPSPort: 443,
+						Type:      nautescrd.ServiceTypeNodePort,
+					},
+				},
+			},
+		}
+
+		isSecret = true
+	})
+
+	It("cluster has primary domain, url should come from domain", func() {
+		url, err := argoevents.GetURLFromCluster(cluster, hostCluster, isSecret)
+		Expect(err).Should(BeNil())
+		targetURL := fmt.Sprintf("https://webhook.%s.%s:443", cluster.Name, cluster.Spec.PrimaryDomain)
+		Expect(url).Should(Equal(targetURL))
+	})
+
+	It("if cluster does not has primary domain and host cluster has primary domain, url should come from host cluster domain", func() {
+		cluster.Spec.PrimaryDomain = ""
+		url, err := argoevents.GetURLFromCluster(cluster, hostCluster, isSecret)
+		Expect(err).Should(BeNil())
+		targetURL := fmt.Sprintf("https://webhook.%s.%s:443", cluster.Name, hostCluster.Spec.PrimaryDomain)
+		Expect(url).Should(Equal(targetURL))
+	})
+
+	It("if cluster does not has primary domain and host cluster doesn't exist, url should come from cluster api", func() {
+		cluster.Spec.PrimaryDomain = ""
+		cluster.Spec.HostCluster = ""
+		cluster.Spec.ApiServer = "https://test.domain.io:6443"
+		url, err := argoevents.GetURLFromCluster(cluster, nil, isSecret)
+		Expect(err).Should(BeNil())
+		targetURL := fmt.Sprintf("https://webhook.%s.test.domain.io:443", cluster.Name)
+		Expect(url).Should(Equal(targetURL))
+	})
+
+	It("If the URL is obtained through the apiserver and the URL format of the apiserver is an IP address, the returned URL address is attached with the suffix .nip.io", func() {
+		cluster.Spec.PrimaryDomain = ""
+		cluster.Spec.HostCluster = ""
+		url, err := argoevents.GetURLFromCluster(cluster, nil, isSecret)
+		Expect(err).Should(BeNil())
+		targetURL := fmt.Sprintf("https://webhook.%s.127.0.0.1.nip.io:443", cluster.Name)
+		Expect(url).Should(Equal(targetURL))
+	})
+
+	It("if get unsafe url, protocal and port is different", func() {
+		isSecret = false
+		url, err := argoevents.GetURLFromCluster(cluster, hostCluster, isSecret)
+		Expect(err).Should(BeNil())
+		targetURL := fmt.Sprintf("http://webhook.%s.%s:80", cluster.Name, cluster.Spec.PrimaryDomain)
+		Expect(url).Should(Equal(targetURL))
+	})
+
 })

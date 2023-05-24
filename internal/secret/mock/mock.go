@@ -84,3 +84,7 @@ func (m mock) GetAccessInfo(ctx context.Context, name string) (string, error) {
 func (m mock) Logout() error {
 	return nil
 }
+
+func (m mock) GetCABundle(ctx context.Context) (string, error) {
+	return "", nil
+}

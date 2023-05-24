@@ -141,7 +141,7 @@ func newRuntimeSyncer(ctx context.Context, task interfaces.RuntimeSyncTask, tena
 	pipelineRepoURL, err := getURLFromCodeRepo(ctx, tenantK8sClient, task.NautesCfg.Nautes.Namespace, *pipelineRepo)
 
 	useHTTPS := true
-	url, err := getURLFromCluster(task.Cluster, useHTTPS)
+	url, err := GetURLFromCluster(task.Cluster, task.HostCluster, useHTTPS)
 	if err != nil {
 		return nil, fmt.Errorf("get url from cluster failed: %w", err)
 	}
@@ -153,6 +153,7 @@ func newRuntimeSyncer(ctx context.Context, task interfaces.RuntimeSyncTask, tena
 		keyPipelineRepoProviderType: provider.Spec.ProviderType,
 		keyPipelineRepoID:           pipelineRepo.Name,
 		keyPipelineRepoURL:          pipelineRepoURL,
+		keyServiceAccountName:       task.ServiceAccountName,
 	}
 
 	cluster := &runtimeSyncer{
@@ -508,7 +509,7 @@ func getIDFromCodeRepo(repoName string) string {
 	return repoParts[1]
 }
 
-func getURLFromCluster(cluster nautescrd.Cluster, isSecret bool) (string, error) {
+func GetURLFromCluster(cluster nautescrd.Cluster, hostCluster *nautescrd.Cluster, isSecret bool) (string, error) {
 	if cluster.Status.EntryPoints == nil {
 		return "", fmt.Errorf("cluster %s does not has entrypoint", cluster.Name)
 	}
@@ -538,7 +539,29 @@ func getURLFromCluster(cluster nautescrd.Cluster, isSecret bool) (string, error)
 	}
 
 	var domain string
-	clusterURL, err := url.Parse(cluster.Spec.ApiServer)
+	if cluster.Spec.PrimaryDomain != "" {
+		domain = cluster.Spec.PrimaryDomain
+	} else if hostCluster != nil && hostCluster.Spec.PrimaryDomain != "" {
+		domain = hostCluster.Spec.PrimaryDomain
+	} else {
+		var err error
+		domain, err = getDomainFromURL(cluster.Spec.ApiServer)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	switch point.Type {
+	case nautescrd.ServiceTypeNodePort:
+		return fmt.Sprintf("%s://webhook.%s.%s:%d", protocol, cluster.Name, domain, port), nil
+	default:
+		return "", fmt.Errorf("unknow ingress service type")
+	}
+}
+
+func getDomainFromURL(serviceURL string) (string, error) {
+	var domain string
+	clusterURL, err := url.Parse(serviceURL)
 	if err != nil {
 		return "", err
 	}
@@ -548,15 +571,10 @@ func getURLFromCluster(cluster nautescrd.Cluster, isSecret bool) (string, error)
 	}
 	ip := net.ParseIP(host)
 	if ip != nil {
-		domain = fmt.Sprintf("webhook.%s.nip.io", host)
+		domain = fmt.Sprintf("%s.nip.io", host)
 	} else {
 		domain = host
 	}
 
-	switch point.Type {
-	case nautescrd.ServiceTypeNodePort:
-		return fmt.Sprintf("%s://%s:%d", protocol, domain, port), nil
-	default:
-		return "", fmt.Errorf("unknow ingress service type")
-	}
+	return domain, nil
 }

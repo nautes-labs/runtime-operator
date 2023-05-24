@@ -225,10 +225,11 @@ func (c *productPipelineSyncerArgoCD) deleteAppProject(ctx context.Context) erro
 func (c *productPipelineSyncerArgoCD) syncApp(ctx context.Context) error {
 	productName := c.task.Product.Name
 	productNamespaceName := c.task.Product.Name
+	appName := fmt.Sprintf("%s-%s", productName, PipelineDeployTaskName)
 
 	app := &argocrd.Application{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      PipelineDeployTaskName,
+			Name:      appName,
 			Namespace: c.task.NautesCfg.Deploy.ArgoCD.Namespace,
 			Labels:    c.productLabel,
 		},
@@ -265,10 +266,11 @@ func (c *productPipelineSyncerArgoCD) syncApp(ctx context.Context) error {
 
 func (c *productPipelineSyncerArgoCD) deleteApp(ctx context.Context) error {
 	productName := c.task.Product.Name
+	appName := fmt.Sprintf("%s-%s", productName, PipelineDeployTaskName)
 
 	app := &argocrd.Application{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      PipelineDeployTaskName,
+			Name:      appName,
 			Namespace: c.task.NautesCfg.Deploy.ArgoCD.Namespace,
 			Labels:    c.productLabel,
 		},

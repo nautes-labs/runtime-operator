@@ -8,6 +8,7 @@ import (
 	argocdv1alpha1 "github.com/argoproj/argo-cd/v2/pkg/apis/application/v1alpha1"
 	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
 	"github.com/nautes-labs/runtime-operator/internal/pipeline/tekton"
+	"github.com/nautes-labs/runtime-operator/pkg/constant"
 	interfaces "github.com/nautes-labs/runtime-operator/pkg/interface"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -35,6 +36,7 @@ var _ = Describe("EnvManager", func() {
 	var project *argocdv1alpha1.AppProject
 	var err error
 	var productNamespace *corev1.Namespace
+	var appName string
 	BeforeEach(func() {
 		productName = fmt.Sprintf("product-%s", randNum())
 
@@ -157,12 +159,13 @@ var _ = Describe("EnvManager", func() {
 		}
 
 		task = interfaces.RuntimeSyncTask{
-			AccessInfo:  accessInfo,
-			Product:     *product,
-			Cluster:     *cluster,
-			NautesCfg:   *nautesCFG,
-			Runtime:     runtime,
-			RuntimeType: interfaces.RUNTIME_TYPE_PIPELINE,
+			AccessInfo:         accessInfo,
+			Product:            *product,
+			Cluster:            *cluster,
+			NautesCfg:          *nautesCFG,
+			Runtime:            runtime,
+			RuntimeType:        interfaces.RUNTIME_TYPE_PIPELINE,
+			ServiceAccountName: constant.ServiceAccountDefault,
 		}
 
 		newTask := task
@@ -194,6 +197,8 @@ var _ = Describe("EnvManager", func() {
 				Destination:    env.Name,
 			},
 		}
+
+		appName = fmt.Sprintf("%s-%s", productName, tekton.PipelineDeployTaskName)
 
 		mockK8SClient.productName = productName
 		mockK8SClient.coderepos = []*nautescrd.CodeRepo{productCodeRepo, runtimeCodeRepo, runtimeCodeRepo2}
@@ -228,7 +233,7 @@ var _ = Describe("EnvManager", func() {
 
 		app = &argocdv1alpha1.Application{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      tekton.PipelineDeployTaskName,
+				Name:      appName,
 				Namespace: argoCDNamespace,
 			},
 		}
@@ -278,7 +283,7 @@ var _ = Describe("EnvManager", func() {
 
 		app = &argocdv1alpha1.Application{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      tekton.PipelineDeployTaskName,
+				Name:      appName,
 				Namespace: argoCDNamespace,
 			},
 		}
@@ -332,7 +337,7 @@ var _ = Describe("EnvManager", func() {
 
 		app = &argocdv1alpha1.Application{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      tekton.PipelineDeployTaskName,
+				Name:      appName,
 				Namespace: argoCDNamespace,
 			},
 		}
@@ -389,7 +394,7 @@ var _ = Describe("EnvManager", func() {
 
 		app = &argocdv1alpha1.Application{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      tekton.PipelineDeployTaskName,
+				Name:      appName,
 				Namespace: argoCDNamespace,
 			},
 		}

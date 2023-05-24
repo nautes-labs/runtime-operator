@@ -20,6 +20,8 @@ type SecretClient interface {
 	Cluster
 	Secret
 	Auth
+	// GetCABundle should return the cacert information of the server. If the server does not use TLS, it should return empty.
+	GetCABundle(ctx context.Context) (string, error)
 	Logout() error
 }
 

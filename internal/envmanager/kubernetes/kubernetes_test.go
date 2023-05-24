@@ -20,6 +20,7 @@ import (
 
 	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
 	envmgr "github.com/nautes-labs/runtime-operator/internal/envmanager/kubernetes"
+	"github.com/nautes-labs/runtime-operator/pkg/constant"
 	interfaces "github.com/nautes-labs/runtime-operator/pkg/interface"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -105,9 +106,10 @@ var _ = Describe("EnvManager", func() {
 					Name: groupName,
 				},
 			},
-			NautesCfg:   *nautesCFG,
-			Runtime:     baseRuntime,
-			RuntimeType: interfaces.RUNTIME_TYPE_DEPLOYMENT,
+			NautesCfg:          *nautesCFG,
+			Runtime:            baseRuntime,
+			RuntimeType:        interfaces.RUNTIME_TYPE_DEPLOYMENT,
+			ServiceAccountName: constant.ServiceAccountDefault,
 		}
 
 		artifactProvier := &nautescrd.ArtifactRepoProvider{
