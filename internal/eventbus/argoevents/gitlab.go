@@ -41,11 +41,41 @@ const (
 )
 
 var (
-	gitlabWebhookEventMapping = map[string]string{
-		"push":          "PushEvents",
-		"tag_push":      "TagPushEvents",
-		"merge_request": "MergeRequestsEvents",
-		"issue":         "IssuesEvents",
+	// The mapping relationship between gitlab webhook and the argo event source event
+	// GitLab API docs:
+	// https://docs.gitlab.com/ce/api/projects.html#list-project-hooks
+	// Dest
+	// https://github.com/xanzy/go-gitlab/blob/v0.79.1/projects.go
+	gitlabWebhookEventToArgoEventMapping = map[string]string{
+		"confidential_issues_events": "ConfidentialIssuesEvents",
+		// "confidential_note_events":   "", go-gitlab not supported
+		// "deployment_events":          "", go-gitlab not supported
+		"issues_events":         "IssuesEvents",
+		"job_events":            "JobEvents",
+		"merge_requests_events": "MergeRequestsEvents",
+		"note_events":           "NoteEvents",
+		"pipeline_events":       "PipelineEvents",
+		"push_events":           "PushEvents",
+		// "releases_events":            "", // go-gitlab not supported
+		"tag_push_events": "TagPushEvents",
+	}
+	// The mapping relationship between gitlab webhook and the gitlab event header
+	// GitLab API docs:
+	// https://docs.gitlab.com/ce/api/projects.html#list-project-hooks
+	// GitLab Event docs:
+	// https://docs.gitlab.com/ee/user/project/integrations/webhook_events.html
+	gitlabWebhookEventToGitlabEventHeaderMapping = map[string]string{
+		// "confidential_issues_events": "",
+		// "confidential_note_events":   "",
+		"deployment_events":     "Deployment Hook",
+		"issues_events":         "Issue Hook",
+		"job_events":            "Job Hook",
+		"merge_requests_events": "Merge Request Hook",
+		"note_events":           "Note Hook",
+		"pipeline_events":       "Pipeline Hook",
+		"push_events":           "Push Hook",
+		"releases_events":       "Release Hook",
+		"tag_push_events":       "Tag Push Hook",
 	}
 )
 
@@ -252,7 +282,7 @@ func (s *runtimeSyncer) calculateEventSourceGitlab(ctx context.Context, eventSou
 		if err != nil {
 			return nil, err
 		}
-		webhookEvents, err := getEventsFromCodeRepo(codeRepo.Spec.Webhook.Events)
+		webhookEvents, err := getArgoEventSourceEventsFromCodeRepo(codeRepo.Spec.Webhook.Events)
 		if err != nil {
 			return nil, err
 		}
@@ -291,14 +321,29 @@ func (s *runtimeSyncer) calculateEventSourceGitlab(ctx context.Context, eventSou
 	return eventSourceSpec, nil
 }
 
-func getEventsFromCodeRepo(events []string) ([]string, error) {
+func getArgoEventSourceEventsFromCodeRepo(events []string) ([]string, error) {
 	webhookEvents := []string{}
 	for _, ev := range events {
-		webhookEvent, ok := gitlabWebhookEventMapping[ev]
+		webhookEvent, ok := gitlabWebhookEventToArgoEventMapping[ev]
 		if !ok {
 			return nil, fmt.Errorf("event %s is unsupported", ev)
 		}
 		webhookEvents = append(webhookEvents, webhookEvent)
+	}
+	return webhookEvents, nil
+}
+
+func getGitlabEventHeadersFromCodeRepo(events []string) ([]string, error) {
+	webhookEvents := []string{}
+	for _, ev := range events {
+		webhookEvent, ok := gitlabWebhookEventToGitlabEventHeaderMapping[ev]
+		if !ok {
+			return nil, fmt.Errorf("event %s is unsupported", ev)
+		}
+		// The header in the gitlab callback message is an array,
+		// and the data matching of the sensor is a regular expression matching,
+		// so it need to use "Push Hook" to match [\"Push Hook\"]
+		webhookEvents = append(webhookEvents, fmt.Sprintf("\"%s\"", webhookEvent))
 	}
 	return webhookEvents, nil
 }
@@ -957,11 +1002,16 @@ func (s *runtimeSyncer) caculateDependencyGitlab(ctx context.Context, event naut
 		},
 	}
 
+	eventsGitlabHeaderFormat, err := getGitlabEventHeadersFromCodeRepo(event.Gitlab.Events)
+	if err != nil {
+		return nil, err
+	}
+
 	if event.Gitlab.Events != nil && len(event.Gitlab.Events) != 0 {
 		dependency.Filters.Data = append(dependency.Filters.Data, sensorv1alpha1.DataFilter{
-			Path:  "body.event_name",
+			Path:  "headers.X-Gitlab-Event",
 			Type:  "string",
-			Value: event.Gitlab.Events,
+			Value: eventsGitlabHeaderFormat,
 		})
 	}
 

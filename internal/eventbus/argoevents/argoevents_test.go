@@ -99,7 +99,7 @@ var _ = Describe("Argoevents", func() {
 				PipelineRuntime:   false,
 				Webhook: &nautescrd.Webhook{
 					Events: []string{
-						"push",
+						"push_events",
 					},
 				},
 			},
@@ -142,7 +142,7 @@ var _ = Describe("Argoevents", func() {
 							RepoName: sourceRepo.Name,
 							Revision: "main",
 							Events: []string{
-								"push",
+								"push_events",
 							},
 						},
 					},
@@ -245,7 +245,7 @@ var _ = Describe("Argoevents", func() {
 				DeploymentRuntime: false,
 				PipelineRuntime:   false,
 				Webhook: &nautescrd.Webhook{
-					Events: []string{"push"},
+					Events: []string{"push_events"},
 				},
 			},
 		}
@@ -280,7 +280,7 @@ var _ = Describe("Argoevents", func() {
 	})
 
 	It("when nautes eventsource events and code repo webhook events is diff, argo event eventsource will use coderepo define, sensor trigger will use eventsource define", func() {
-		runtime.Spec.EventSources[0].Gitlab.Events = []string{"tag_push"}
+		runtime.Spec.EventSources[0].Gitlab.Events = []string{"tag_push_events"}
 		_, err := syncer.SyncEvents(ctx, task)
 		Expect(err).Should(BeNil())
 
@@ -298,8 +298,8 @@ var _ = Describe("Argoevents", func() {
 		Expect(len(sensorList.Items)).Should(Equal(1))
 		isSame = false
 		for _, filter := range sensorList.Items[0].Spec.Dependencies[0].Filters.Data {
-			if filter.Path == "body.event_name" {
-				isSame = reflect.DeepEqual(filter.Value, runtime.Spec.EventSources[0].Gitlab.Events)
+			if filter.Path == "headers.X-Gitlab-Event" {
+				isSame = reflect.DeepEqual(filter.Value, []string{"\"Tag Push Hook\""})
 			}
 		}
 		Expect(isSame).Should(BeTrue())
