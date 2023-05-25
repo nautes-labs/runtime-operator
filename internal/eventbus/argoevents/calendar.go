@@ -156,11 +156,16 @@ func (s *runtimeSyncer) caculateTriggerCalendar(ctx context.Context, runtimeTrig
 	}
 	trigger.Template.K8s.Parameters = paras
 
-	intiPipeline, err := getStringFromTemplate(tmplTektonInitPipeline, vars)
+	// Currently unable to specify which template to select, the first template is obtained by default.
+	initPipeline, err := s.getTriggerFromTemplate("", vars)
 	if err != nil {
 		return nil, err
 	}
-	resource := common.NewResource(intiPipeline)
+
+	resource := common.NewResource(initPipeline)
+	if resource.Value == nil {
+		return nil, fmt.Errorf("generate trigger source failed")
+	}
 	trigger.Template.K8s.Source = &sensorv1alpha1.ArtifactLocation{
 		Resource: &resource,
 	}

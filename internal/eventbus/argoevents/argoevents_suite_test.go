@@ -141,6 +141,23 @@ secret:
 			Name: "argo-events",
 		},
 	})
+
+	cm := corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nautes-runtime-trigger-templates",
+			Namespace: "nautes",
+		},
+		Data: map[string]string{
+			"base": `apiVersion: v1
+kind: ConfigMap
+metadata:
+name: nautes-runtime-trigger-templates
+namespace: nautes`,
+		},
+	}
+	fakeConfigMap = map[string]corev1.ConfigMap{
+		cm.Name: cm,
+	}
 }
 
 func randNum() string {
@@ -179,6 +196,7 @@ var (
 			ProviderType: "gitlab",
 		},
 	}
+	fakeConfigMap map[string]corev1.ConfigMap
 )
 
 func (c *mockClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object) error {
@@ -206,6 +224,16 @@ func (c *mockClient) Get(ctx context.Context, key client.ObjectKey, obj client.O
 		}
 		obj.(*nautescrd.Product).ObjectMeta = product.ObjectMeta
 		obj.(*nautescrd.Product).Spec = product.Spec
+	case *corev1.ConfigMap:
+		cm, ok := fakeConfigMap[key.Name]
+		if !ok {
+			return apierrors.NewNotFound(schema.GroupResource{
+				Group:    "",
+				Resource: "",
+			}, key.Name)
+		}
+		obj.(*corev1.ConfigMap).ObjectMeta = cm.ObjectMeta
+		obj.(*corev1.ConfigMap).Data = cm.Data
 	default:
 		return apierrors.NewNotFound(schema.GroupResource{}, obj.GetName())
 	}

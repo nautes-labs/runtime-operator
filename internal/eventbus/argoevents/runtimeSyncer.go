@@ -15,12 +15,14 @@
 package argoevents
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
 	"net/url"
 	"reflect"
 	"strings"
+	"text/template"
 
 	eventsourcev1alpha1 "github.com/argoproj/argo-events/pkg/apis/eventsource/v1alpha1"
 	sensorv1alpha1 "github.com/argoproj/argo-events/pkg/apis/sensor/v1alpha1"
@@ -39,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/yaml"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	hncv1alpha2 "sigs.k8s.io/hierarchical-namespaces/api/v1alpha2"
@@ -60,9 +63,10 @@ func init() {
 }
 
 const (
-	IsolationShared          = "shared"
-	IsolationExclusive       = "exclusive"
-	eventSourcePort    int32 = 12000
+	IsolationShared                    = "shared"
+	IsolationExclusive                 = "exclusive"
+	eventSourcePort              int32 = 12000
+	ConfigMapTriggerTemplateName       = "nautes-runtime-trigger-templates"
 )
 
 type sensorGenerateFunction func(ctx context.Context, trigger nautescrd.PipelineTrigger) (*sensorv1alpha1.Sensor, error)
@@ -88,6 +92,7 @@ type runtimeSyncer struct {
 	pipelineRepo         nautescrd.CodeRepo
 	pipelineRepoProvider nautescrd.CodeRepoProvider
 	secClient            interfaces.SecretClient
+	triggerTemplates     map[string]string
 	// vars use to create trigger template or resources names
 	vars map[string]string
 	// webhookURL store the domain of event source, it will be used when eventsource need callback addr, likes gitlab webhook.
@@ -146,6 +151,16 @@ func newRuntimeSyncer(ctx context.Context, task interfaces.RuntimeSyncTask, tena
 		return nil, fmt.Errorf("get url from cluster failed: %w", err)
 	}
 
+	templates := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ConfigMapTriggerTemplateName,
+			Namespace: task.NautesCfg.Nautes.Namespace,
+		},
+	}
+	if err := tenantK8sClient.Get(ctx, client.ObjectKeyFromObject(templates), templates); err != nil {
+		return nil, fmt.Errorf("load template failed: %w", err)
+	}
+
 	vars := map[string]string{
 		keyProductName:              task.Product.Name,
 		keyRuntimeName:              pipelineRuntime.Name,
@@ -169,6 +184,7 @@ func newRuntimeSyncer(ctx context.Context, task interfaces.RuntimeSyncTask, tena
 		secClient:             secClient,
 		vars:                  vars,
 		webhookURL:            url,
+		triggerTemplates:      templates.Data,
 		eventSourceGeneraters: map[eventType]eventSourceGenerateFunction{},
 		eventSourceCleaners:   map[eventType]eventSourceCleanFunction{},
 		sensorGeneraters:      map[eventType]sensorGenerateFunction{},
@@ -456,6 +472,36 @@ func (s *runtimeSyncer) initSecretRepoVault(ctx context.Context) error {
 	}
 
 	return s.secClient.CreateRole(ctx, s.cluster.Name, role)
+}
+
+func (s *runtimeSyncer) getTriggerFromTemplate(templateName string, vars interface{}) (map[string]interface{}, error) {
+	// Currently unable to specify which template to select, the first template is obtained by default.
+	if len(s.triggerTemplates) == 0 {
+		return nil, fmt.Errorf("trigger template is empty")
+	}
+	var tmplName string
+	for name, _ := range s.triggerTemplates {
+		tmplName = name
+		break
+	}
+
+	tmpl, err := template.New(tmplName).Parse(s.triggerTemplates[tmplName])
+	if err != nil {
+		return nil, err
+	}
+
+	var triggerByte bytes.Buffer
+	err = tmpl.Execute(&triggerByte, vars)
+	if err != nil {
+		return nil, err
+	}
+
+	var trigger map[string]interface{}
+	if err := yaml.Unmarshal(triggerByte.Bytes(), &trigger); err != nil {
+		return nil, err
+	}
+
+	return trigger, nil
 }
 
 func getProviderTypeFromCodeRepo(ctx context.Context, client client.Client, nautesNamespace string, repo nautescrd.CodeRepo) (string, error) {

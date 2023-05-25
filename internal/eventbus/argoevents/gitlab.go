@@ -25,7 +25,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -1016,7 +1015,7 @@ func (s *runtimeSyncer) caculateDependencyGitlab(ctx context.Context, event naut
 	}
 
 	if event.Gitlab.Revision != "" {
-		dependency.Filters.Script = fmt.Sprintf("if string.match(event.body.ref, \"%s\") then return true else return false end", event.Gitlab.Revision)
+		dependency.Filters.Script = fmt.Sprintf("if type(event.body.ref) ~= \"nil\" and string.match(event.body.ref, \"%s\") and event.body.after ~= \"0000000000000000000000000000000000000000\" then return true else return false end", event.Gitlab.Revision)
 	}
 
 	return &dependency, nil
@@ -1052,17 +1051,16 @@ func (s *runtimeSyncer) caculateTriggerGitlab(ctx context.Context, runtimeTrigge
 	}
 	trigger.Template.K8s.Parameters = paras
 
-	initPipeline, err := getStringFromTemplate(tmplTektonInitPipeline, vars)
+	// Currently unable to specify which template to select, the first template is obtained by default.
+	initPipeline, err := s.getTriggerFromTemplate("", vars)
 	if err != nil {
 		return nil, err
 	}
 
-	var inter map[string]interface{}
-	if err := yaml.Unmarshal([]byte(initPipeline), &inter); err != nil {
-		return nil, err
+	resource := common.NewResource(initPipeline)
+	if resource.Value == nil {
+		return nil, fmt.Errorf("generate trigger source failed")
 	}
-
-	resource := common.NewResource(inter)
 	trigger.Template.K8s.Source = &sensorv1alpha1.ArtifactLocation{
 		Resource: &resource,
 	}
