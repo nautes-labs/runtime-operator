@@ -155,7 +155,7 @@ func (c *destCluster) cleanUpProduct(ctx context.Context) error {
 	if err := c.k8sClient.Delete(ctx, &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{
 		Name:      rolebindingName,
 		Namespace: c.task.Product.Name,
-	}}); err != nil {
+	}}); client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("delete rolebinding failed: %w", err)
 	}
 	return nil

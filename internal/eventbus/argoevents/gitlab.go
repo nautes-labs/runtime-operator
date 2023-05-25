@@ -353,7 +353,7 @@ func (s *runtimeSyncer) syncGitlabAccessToken(ctx context.Context, name, repoNam
 	if err := s.syncSecretStore(ctx, secretStoreName); err != nil {
 		return fmt.Errorf("sync secret store %s failed: %w", secretStoreName, err)
 	}
-	esSpec, err := s.caculateExternalSecret(ctx, name)
+	esSpec, err := s.caculateExternalSecret(ctx, name, repoName)
 	if err != nil {
 		return err
 	}
@@ -491,12 +491,12 @@ func (s *runtimeSyncer) syncExternalSecret(ctx context.Context, name, repoName s
 	return nil
 }
 
-func (s *runtimeSyncer) caculateExternalSecret(ctx context.Context, secretName string) (*externalsecretcrd.ExternalSecretSpec, error) {
+func (s *runtimeSyncer) caculateExternalSecret(ctx context.Context, secretName, codeRepoName string) (*externalsecretcrd.ExternalSecretSpec, error) {
 	var spec *externalsecretcrd.ExternalSecretSpec
 	var err error
 	switch s.config.Secret.RepoType {
 	case configs.SECRET_STORE_VAULT:
-		spec, err = s.caculateExternalSecretVault(ctx, secretName)
+		spec, err = s.caculateExternalSecretVault(ctx, secretName, codeRepoName)
 		if err != nil {
 			return nil, err
 		}
@@ -512,8 +512,10 @@ const (
 	externalSecretRefSecretStoreKind  = "SecretStore"
 )
 
-func (s *runtimeSyncer) caculateExternalSecretVault(ctx context.Context, secretName string) (*externalsecretcrd.ExternalSecretSpec, error) {
-	secretPath, err := getStringFromTemplate(tmplVaultEngineGitAcessTokenPath, s.vars)
+func (s *runtimeSyncer) caculateExternalSecretVault(ctx context.Context, secretName, codeRepoName string) (*externalsecretcrd.ExternalSecretSpec, error) {
+	vars := deepCopyStringMap(s.vars)
+	vars[keyRepoName] = codeRepoName
+	secretPath, err := getStringFromTemplate(tmplVaultEngineGitAcessTokenPath, vars)
 	if err != nil {
 		return nil, err
 	}

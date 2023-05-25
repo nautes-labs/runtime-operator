@@ -34,7 +34,7 @@ var (
 		tmplDependencyName:               "{{ .runtimeName }}-{{ .eventSourceType }}-{{ .eventName }}",
 		tmplTriggerName:                  "{{ .eventName }}-{{ .pipelineName }}-{{ .eventSourceType }}",
 		tmplSensorName:                   "{{ .productName }}-{{ .runtimeName }}",
-		tmplVaultEngineGitAcessTokenPath: "{{ .pipelineRepoProviderType }}/{{ .pipelineRepoID }}/default/accesstoken-api",
+		tmplVaultEngineGitAcessTokenPath: "{{ .pipelineRepoProviderType }}/{{ .repoName }}/default/accesstoken-api",
 	}
 )
 
