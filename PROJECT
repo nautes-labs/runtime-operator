@@ -10,4 +10,9 @@ resources:
   group: nautes
   kind: DeploymentRuntime
   version: v1alpha1
+- controller: true
+  domain: resource.nautes.io
+  group: nautes
+  kind: ProjectPipelineRuntime
+  version: v1alpha1
 version: "3"

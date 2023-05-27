@@ -5,30 +5,20 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.8.0
   creationTimestamp: null
-  name: environments.nautes.resource.nautes.io
+  name: coderepobindings.nautes.resource.nautes.io
 spec:
   group: nautes.resource.nautes.io
   names:
-    kind: Environment
-    listKind: EnvironmentList
-    plural: environments
-    singular: environment
+    kind: CodeRepoBinding
+    listKind: CodeRepoBindingList
+    plural: coderepobindings
+    singular: coderepobinding
   scope: Namespaced
   versions:
-  - additionalPrinterColumns:
-    - jsonPath: .spec.product
-      name: PRODUCTRESOURCENAME
-      type: string
-    - jsonPath: .spec.cluster
-      name: CLUSTER
-      type: string
-    - jsonPath: .spec.envType
-      name: ENVTYPE
-      type: string
-    name: v1alpha1
+  - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Environment is the Schema for the environments API
+        description: CodeRepoBinding is the Schema for the coderepobindings API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -43,21 +33,28 @@ spec:
           metadata:
             type: object
           spec:
-            description: EnvironmentSpec defines the desired state of Environment
+            description: CodeRepoBindingSpec defines the desired state of CodeRepoBinding
             properties:
-              cluster:
+              coderepo:
+                description: Authorized Code Repository.
                 type: string
-              envType:
+              permissions:
+                description: Authorization Permissions, readwrite or readonly.
                 type: string
               product:
+                description: The Code repo is authorized to this product or projects
+                  under it.
                 type: string
-            required:
-            - cluster
-            - envType
-            - product
+              projects:
+                description: If the project list is empty, it means that the code
+                  repo is authorized to the product. If the project list has values,
+                  it means that the code repo is authorized to the specified projects.
+                items:
+                  type: string
+                type: array
             type: object
           status:
-            description: EnvironmentStatus defines the observed state of Environment
+            description: CodeRepoBindingStatus defines the observed state of CodeRepoBinding
             type: object
         type: object
     served: true

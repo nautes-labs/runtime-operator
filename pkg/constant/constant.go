@@ -12,24 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package interfaces
-
-import "context"
-
-// nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
+package constant
 
 const (
-	RUNTIME_TYPE_DEPLOYMENT RuntimeType = "deployment"
-	RUNTIME_TYPE_PIPELINE   RuntimeType = "pipeline"
+	ServiceAccountDefault = "nautes-sa"
 )
-
-type RuntimeType string
-
-type Deployment interface {
-	Deploy(ctx context.Context, task RuntimeSyncTask) (*DeployInfo, error)
-	UnDeploy(ctx context.Context, task RuntimeSyncTask) error
-}
-
-type DeployInfo struct {
-	Source string
-}

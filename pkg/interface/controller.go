@@ -21,19 +21,29 @@ import (
 	nautescfg "github.com/nautes-labs/pkg/pkg/nautesconfigs"
 )
 
-type DeploymentRuntimeSyncer interface {
-	Sync(ctx context.Context, runtime nautescrd.DeploymentRuntime) (*DeployInfo, error)
-	Delete(ctx context.Context, runtime nautescrd.DeploymentRuntime) error
+// RuntimeSyncer is use to deploy or clean up runtime in dest environment. It can handle any type of runtime.
+type RuntimeSyncer interface {
+	Sync(ctx context.Context, runtime Runtime) (*DeployInfo, error)
+	Delete(ctx context.Context, runtime Runtime) error
 }
 
-type DeployTask struct {
-	AccessInfo  AccessInfo
-	Product     nautescrd.Product
+// RuntimeSyncTask stores all the information needed during the deployment processe.
+type RuntimeSyncTask struct {
+	// AccessInfo use to connect dest environment, like kubeconfig of kubernetes.
+	AccessInfo AccessInfo
+	// Product store the runtime's product resource.
+	Product nautescrd.Product
+	// Cluster store runtime's cluster resource.
+	Cluster     nautescrd.Cluster
+	HostCluster *nautescrd.Cluster
 	NautesCfg   nautescfg.Config
+	// Runtime is the runtime resource of this sync, it chould be pipeline runtime or deployment runtime.
 	Runtime     Runtime
 	RuntimeType RuntimeType
+	// ServiceAccountName is the authorized account name in k8s, it can get secrets from secret store, create resource in runtime namespace, etc.
+	ServiceAccountName string
 }
 
-func (t *DeployTask) GetLabel() map[string]string {
+func (t *RuntimeSyncTask) GetLabel() map[string]string {
 	return map[string]string{nautescrd.LABEL_BELONG_TO_PRODUCT: t.Product.Name}
 }

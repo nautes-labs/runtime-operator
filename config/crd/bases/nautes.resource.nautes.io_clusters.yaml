@@ -147,6 +147,21 @@ spec:
                   type: object
                 nullable: true
                 type: array
+              entryPoints:
+                additionalProperties:
+                  properties:
+                    httpPort:
+                      description: The port of entry point service
+                      format: int32
+                      type: integer
+                    httpsPort:
+                      format: int32
+                      type: integer
+                    type:
+                      type: string
+                  type: object
+                nullable: true
+                type: object
               mgtAuthStatus:
                 properties:
                   lastSuccessSpec:

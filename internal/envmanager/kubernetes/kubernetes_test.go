@@ -20,6 +20,7 @@ import (
 
 	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
 	envmgr "github.com/nautes-labs/runtime-operator/internal/envmanager/kubernetes"
+	"github.com/nautes-labs/runtime-operator/pkg/constant"
 	interfaces "github.com/nautes-labs/runtime-operator/pkg/interface"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -49,7 +50,8 @@ var _ = Describe("EnvManager", func() {
 	var productNamespaceIsTerminating bool
 	var artifactRepos []nautescrd.ArtifactRepo
 
-	var task interfaces.DeployTask
+	var productCodeRepo *nautescrd.CodeRepo
+	var task interfaces.RuntimeSyncTask
 	BeforeEach(func() {
 		productName = fmt.Sprintf("test-project-%s", randNum())
 		groupName = fmt.Sprintf("group-%s", randNum())
@@ -65,6 +67,22 @@ var _ = Describe("EnvManager", func() {
 		})
 		Expect(err).Should(BeNil())
 
+		productCodeRepo = &nautescrd.CodeRepo{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("repo-%s", randNum()),
+				Namespace: "nautes",
+			},
+			Spec: nautescrd.CodeRepoSpec{
+				CodeRepoProvider: "test",
+				Product:          productName,
+				Project:          "",
+				RepoName:         artifactRepoName,
+				URL:              "ssh://127.0.0.1/test/default.project.git",
+			},
+		}
+
+		mockK8SClient.CodeRepos = []nautescrd.CodeRepo{*productCodeRepo}
+
 		baseRuntime = &nautescrd.DeploymentRuntime{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      runtimeName,
@@ -77,7 +95,7 @@ var _ = Describe("EnvManager", func() {
 			},
 		}
 
-		task = interfaces.DeployTask{
+		task = interfaces.RuntimeSyncTask{
 			AccessInfo: *accessInfo,
 			Product: nautescrd.Product{
 				ObjectMeta: metav1.ObjectMeta{
@@ -88,9 +106,10 @@ var _ = Describe("EnvManager", func() {
 					Name: groupName,
 				},
 			},
-			NautesCfg:   *nautesCFG,
-			Runtime:     baseRuntime,
-			RuntimeType: interfaces.RUNTIME_TYPE_DEPLOYMENT,
+			NautesCfg:          *nautesCFG,
+			Runtime:            baseRuntime,
+			RuntimeType:        interfaces.RUNTIME_TYPE_DEPLOYMENT,
+			ServiceAccountName: constant.ServiceAccountDefault,
 		}
 
 		artifactProvier := &nautescrd.ArtifactRepoProvider{

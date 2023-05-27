@@ -20,49 +20,54 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	kratos "github.com/go-kratos/kratos/v2/transport/http"
 	vault "github.com/hashicorp/vault/api"
 	kubernetesauth "github.com/hashicorp/vault/api/auth/kubernetes"
 	configs "github.com/nautes-labs/pkg/pkg/nautesconfigs"
 	nautescfg "github.com/nautes-labs/pkg/pkg/nautesconfigs"
+	vaultproxy "github.com/nautes-labs/runtime-operator/internal/vaultproxy"
 	runtimeinterface "github.com/nautes-labs/runtime-operator/pkg/interface"
-	vaultproxyv1 "github.com/nautes-labs/vault-proxy/api/vaultproxy/v1"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
-	CLUSTER_NAMESPACE         = "cluster"
-	CLUSTER_PATH              = "kubernetes/%s/default/admin"
-	CLUSTER_KUBECONFIG_KEY    = "kubeconfig"
-	_RUNTIME_OPERATOR_NAME    = "Runtime"
-	_GIT_REPO_USER_NAME       = "default"
-	_GIT_REPO_PERMISSION      = "readonly"
-	_ARTIFACT_REPO_USER_NAME  = "default"
-	_ARTIFACT_REPO_PERMISSION = "readonly"
+	CLUSTER_NAMESPACE      = "cluster"
+	CLUSTER_PATH           = "kubernetes/%s/default/admin"
+	CLUSTER_KUBECONFIG_KEY = "kubeconfig"
+	_RUNTIME_OPERATOR_NAME = "Runtime"
 )
 
 type Vault struct {
-	client vault.Client
-	vaultproxyv1.SecretHTTPClient
-	vaultproxyv1.AuthHTTPClient
-	vaultproxyv1.AuthGrantHTTPClient
-	getDBName  map[runtimeinterface.SecretType]string
-	getKeyFunc map[runtimeinterface.SecretType]getSecretKey
+	client *vault.Client
+	vaultproxy.SecretHTTPClient
+	vaultproxy.AuthHTTPClient
+	vaultproxy.AuthGrantHTTPClient
+	caBundle             string
+	getDBName            map[runtimeinterface.SecretType]string
+	getKeyFunc           map[runtimeinterface.SecretType]getSecretKey
+	grantPermissionFunc  map[runtimeinterface.SecretType]grantPermission
+	revokePermissionFunc map[runtimeinterface.SecretType]revokePermission
 }
+
+type getSecretKey func(ctx context.Context, repo runtimeinterface.SecretInfo) (string, error)
+type grantPermission func(ctx context.Context, repo runtimeinterface.SecretInfo, destUser, destEnv string) error
+type revokePermission func(ctx context.Context, repo runtimeinterface.SecretInfo, destUser, destEnv string) error
 
 // CreateRole implements interfaces.SecretClient
 func (s *Vault) CreateRole(ctx context.Context, clusterName string, role runtimeinterface.Role) error {
-	req := &vaultproxyv1.AuthroleRequest{
+	req := &vaultproxy.AuthroleRequest{
 		ClusterName: clusterName,
 		DestUser:    role.Name,
-		Role: &vaultproxyv1.AuthroleRequest_K8S{
-			K8S: &vaultproxyv1.KubernetesAuthRoleMeta{
+		Role: &vaultproxy.AuthroleRequest_K8S{
+			K8S: &vaultproxy.KubernetesAuthRoleMeta{
 				Namespaces:      role.Groups[0],
-				Serviceaccounts: role.Users[0],
+				ServiceAccounts: role.Users[0],
 			},
 		},
 	}
@@ -75,13 +80,13 @@ func (s *Vault) CreateRole(ctx context.Context, clusterName string, role runtime
 
 // DeleteRole implements interfaces.SecretClient
 func (s *Vault) DeleteRole(ctx context.Context, clusterName string, role runtimeinterface.Role) error {
-	req := &vaultproxyv1.AuthroleRequest{
+	req := &vaultproxy.AuthroleRequest{
 		ClusterName: clusterName,
 		DestUser:    role.Name,
-		Role: &vaultproxyv1.AuthroleRequest_K8S{
-			K8S: &vaultproxyv1.KubernetesAuthRoleMeta{
+		Role: &vaultproxy.AuthroleRequest_K8S{
+			K8S: &vaultproxy.KubernetesAuthRoleMeta{
 				Namespaces:      role.Groups[0],
-				Serviceaccounts: role.Users[0],
+				ServiceAccounts: role.Users[0],
 			},
 		},
 	}
@@ -104,10 +109,11 @@ func (s *Vault) GetRole(ctx context.Context, clusterName string, role runtimeint
 	}
 
 	users := roleInfo.Data["bound_service_account_names"].([]interface{})
+	namespace := roleInfo.Data["bound_service_account_namespaces"].([]interface{})
 	vaultRole := &runtimeinterface.Role{
 		Name:   role.Name,
 		Users:  []string{users[0].(string)},
-		Groups: []string{},
+		Groups: []string{namespace[0].(string)},
 	}
 	return vaultRole, nil
 }
@@ -130,70 +136,86 @@ func (s *Vault) GetSecretKey(ctx context.Context, repo runtimeinterface.SecretIn
 	return fn(ctx, repo)
 }
 
-type getSecretKey func(ctx context.Context, repo runtimeinterface.SecretInfo) (string, error)
-
-func (s *Vault) getGitSecretKey(ctx context.Context, repo runtimeinterface.SecretInfo) (string, error) {
-	req := vaultproxyv1.GitRequest{
-		Providertype: repo.CodeRepo.ProviderType,
-		Repoid:       repo.CodeRepo.ID,
-		Username:     _GIT_REPO_USER_NAME,
-		Permission:   _GIT_REPO_PERMISSION,
-		Account:      &vaultproxyv1.GitAccount{},
+func (s *Vault) getSecretKeyGit(ctx context.Context, repo runtimeinterface.SecretInfo) (string, error) {
+	meta := &vaultproxy.GitMeta{
+		ProviderType: repo.CodeRepo.ProviderType,
+		Id:           repo.CodeRepo.ID,
+		Username:     repo.CodeRepo.User,
+		Permission:   string(repo.CodeRepo.Permission),
 	}
-	secret, err := req.ConvertRequest()
+	secretMeta, err := meta.GetNames()
 	if err != nil {
 		return "", err
 	}
-	return secret.SecretPath, nil
+	return secretMeta.SecretPath, nil
 }
 
-func (s *Vault) getArtifactSecretKey(ctx context.Context, repo runtimeinterface.SecretInfo) (string, error) {
-	req := vaultproxyv1.RepoRequest{
-		Providerid: repo.AritifaceRepo.ProviderName,
-		Repotype:   repo.AritifaceRepo.RepoType,
-		Repoid:     repo.AritifaceRepo.ID,
-		Username:   _ARTIFACT_REPO_USER_NAME,
-		Permission: _ARTIFACT_REPO_PERMISSION,
-		Account:    &vaultproxyv1.RepoAccount{},
+func (s *Vault) getSecretKeyArtifact(ctx context.Context, repo runtimeinterface.SecretInfo) (string, error) {
+	meta := vaultproxy.RepoMeta{
+		ProviderId: repo.AritifaceRepo.ProviderName,
+		Type:       repo.AritifaceRepo.RepoType,
+		Id:         repo.AritifaceRepo.ID,
+		Username:   repo.AritifaceRepo.User,
+		Permission: repo.AritifaceRepo.Permission,
 	}
-	secret, err := req.ConvertRequest()
+	secretMeta, err := meta.GetNames()
 	if err != nil {
 		return "", err
 	}
-	return secret.SecretPath, nil
+	return secretMeta.SecretPath, nil
 }
 
-func (s *Vault) GrantPermission(ctx context.Context, providerType, repoName, destUser, destEnv string) error {
-	req := &vaultproxyv1.AuthroleGitPolicyRequest{
+func (s *Vault) GrantPermission(ctx context.Context, repo runtimeinterface.SecretInfo, destUser, destEnv string) error {
+	fn, ok := s.grantPermissionFunc[repo.Type]
+	if !ok {
+		return fmt.Errorf("unknow type of secret")
+	}
+	return fn(ctx, repo, destUser, destEnv)
+}
+
+func (s *Vault) grantPermissionGit(ctx context.Context, repo runtimeinterface.SecretInfo, destUser, destEnv string) error {
+	req := &vaultproxy.AuthroleGitPolicyRequest{
 		ClusterName: destEnv,
 		DestUser:    destUser,
-		SecretOptions: &vaultproxyv1.GitRequest{
-			Providertype: providerType,
-			Repoid:       repoName,
-			Username:     _GIT_REPO_USER_NAME,
-			Permission:   _GIT_REPO_PERMISSION,
-			Account:      &vaultproxyv1.GitAccount{},
+		Secret: &vaultproxy.GitMeta{
+			ProviderType: repo.CodeRepo.ProviderType,
+			Id:           repo.CodeRepo.ID,
+			Username:     repo.CodeRepo.User,
+			Permission:   string(repo.CodeRepo.Permission),
 		},
 	}
 	_, err := s.GrantAuthroleGitPolicy(ctx, req)
 	return err
 }
 
-func (s *Vault) RevokePermission(ctx context.Context, providerType, repoName, destUser, destEnv string) error {
-	req := &vaultproxyv1.AuthroleGitPolicyRequest{
+func (s *Vault) RevokePermission(ctx context.Context, repo runtimeinterface.SecretInfo, destUser, destEnv string) error {
+	fn, ok := s.revokePermissionFunc[repo.Type]
+	if !ok {
+		return fmt.Errorf("unknow type of secret")
+	}
+	return fn(ctx, repo, destUser, destEnv)
+}
+
+func (s *Vault) revokePermissionGit(ctx context.Context, repo runtimeinterface.SecretInfo, destUser, destEnv string) error {
+	req := &vaultproxy.AuthroleGitPolicyRequest{
 		ClusterName: destEnv,
 		DestUser:    destUser,
-		SecretOptions: &vaultproxyv1.GitRequest{
-			Providertype: providerType,
-			Repoid:       repoName,
-			Username:     _GIT_REPO_USER_NAME,
-			Permission:   _GIT_REPO_PERMISSION,
-			Account:      &vaultproxyv1.GitAccount{},
+		Secret: &vaultproxy.GitMeta{
+			ProviderType: repo.CodeRepo.ProviderType,
+			Id:           repo.CodeRepo.ID,
+			Username:     repo.CodeRepo.User,
+			Permission:   string(repo.CodeRepo.Permission),
 		},
 	}
+
 	_, err := s.RevokeAuthroleGitPolicy(ctx, req)
 	return err
 }
+
+func (s *Vault) GetCABundle(ctx context.Context) (string, error) {
+	return s.caBundle, nil
+}
+
 func NewClient(cfg nautescfg.SecretRepo) (runtimeinterface.SecretClient, error) {
 	vaultClient, err := newVaultClient(cfg)
 	if err != nil {
@@ -205,10 +227,11 @@ func NewClient(cfg nautescfg.SecretRepo) (runtimeinterface.SecretClient, error) 
 	}
 
 	client := &Vault{
-		client:              *vaultClient,
+		client:              vaultClient,
 		SecretHTTPClient:    secClient,
 		AuthHTTPClient:      authClient,
 		AuthGrantHTTPClient: grantClient,
+		caBundle:            cfg.Vault.CABundle,
 	}
 
 	client.getDBName = map[runtimeinterface.SecretType]string{
@@ -218,8 +241,16 @@ func NewClient(cfg nautescfg.SecretRepo) (runtimeinterface.SecretClient, error) 
 	}
 
 	client.getKeyFunc = map[runtimeinterface.SecretType]getSecretKey{
-		runtimeinterface.SECRET_TYPE_GIT:      client.getGitSecretKey,
-		runtimeinterface.SECRET_TYPE_ARTIFACT: client.getArtifactSecretKey,
+		runtimeinterface.SECRET_TYPE_GIT:      client.getSecretKeyGit,
+		runtimeinterface.SECRET_TYPE_ARTIFACT: client.getSecretKeyArtifact,
+	}
+
+	client.grantPermissionFunc = map[runtimeinterface.SecretType]grantPermission{
+		runtimeinterface.SECRET_TYPE_GIT: client.grantPermissionGit,
+	}
+
+	client.revokePermissionFunc = map[runtimeinterface.SecretType]revokePermission{
+		runtimeinterface.SECRET_TYPE_GIT: client.revokePermissionGit,
 	}
 
 	return client, nil
@@ -298,7 +329,7 @@ func newVaultClient(cfg configs.SecretRepo) (*vault.Client, error) {
 	return client, nil
 }
 
-func newVProxyClient(url, PKIPath string) (vaultproxyv1.SecretHTTPClient, vaultproxyv1.AuthHTTPClient, vaultproxyv1.AuthGrantHTTPClient, error) {
+func newVProxyClient(url, PKIPath string) (vaultproxy.SecretHTTPClient, vaultproxy.AuthHTTPClient, vaultproxy.AuthGrantHTTPClient, error) {
 	ca, err := ioutil.ReadFile(filepath.Join(PKIPath, "ca.crt"))
 	if err != nil {
 		return nil, nil, nil, err
@@ -319,15 +350,29 @@ func newVProxyClient(url, PKIPath string) (vaultproxyv1.SecretHTTPClient, vaultp
 		Certificates: []tls.Certificate{cert},
 	}
 
+	newTransport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
 	httpClient, err := kratos.NewClient(context.Background(),
+		kratos.WithTransport(newTransport),
 		kratos.WithEndpoint(url),
 		kratos.WithTLSConfig(tlsConfig))
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	return vaultproxyv1.NewSecretHTTPClient(httpClient),
-		vaultproxyv1.NewAuthHTTPClient(httpClient),
-		vaultproxyv1.NewAuthGrantHTTPClient(httpClient),
+	return vaultproxy.NewSecretHTTPClient(httpClient),
+		vaultproxy.NewAuthHTTPClient(httpClient),
+		vaultproxy.NewAuthGrantHTTPClient(httpClient),
 		nil
 }

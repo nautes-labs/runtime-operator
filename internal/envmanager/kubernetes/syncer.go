@@ -57,13 +57,17 @@ func (m Syncer) GetAccessInfo(ctx context.Context, cluster nautescrd.Cluster) (*
 }
 
 // Sync create or update a usable env for the next step, it will create namespaces, rolebinding and other resources runtime required.
-func (m Syncer) Sync(ctx context.Context, task interfaces.DeployTask) (*interfaces.EnvSyncResult, error) {
+func (m Syncer) Sync(ctx context.Context, task interfaces.RuntimeSyncTask) (*interfaces.EnvSyncResult, error) {
 	destCluster, err := newDestCluster(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("create dest cluster client failed: %w", err)
 	}
 
-	if err := destCluster.syncProductNamespace(ctx); err != nil {
+	productCodeRepo, err := getProductCodeRepo(ctx, m.Client, task.Product.Name, task.NautesCfg.Nautes.Namespace)
+	if err != nil {
+		return nil, fmt.Errorf("get product coderepo failed: %w", err)
+	}
+	if err := destCluster.syncProductNamespace(ctx, productCodeRepo); err != nil {
 		return nil, fmt.Errorf("sync product namespace failed: %w", err)
 	}
 
@@ -71,7 +75,7 @@ func (m Syncer) Sync(ctx context.Context, task interfaces.DeployTask) (*interfac
 		return nil, fmt.Errorf("sync product authority failed: %w", err)
 	}
 
-	if err := destCluster.syncRuntimeNamespace(ctx); err != nil {
+	if err := destCluster.syncRuntimeNamespace(ctx, nil); err != nil {
 		return nil, fmt.Errorf("sync runtime namespace failed: %w", err)
 	}
 
@@ -79,32 +83,22 @@ func (m Syncer) Sync(ctx context.Context, task interfaces.DeployTask) (*interfac
 		return nil, fmt.Errorf("sync relationship namespace failed: %w", err)
 	}
 
-	if err := destCluster.SyncRole(ctx); err != nil {
-		return nil, fmt.Errorf("sync role failed: %w", err)
+	syncResult := &interfaces.EnvSyncResult{}
+	repos, err := m.getRepos(ctx, task)
+	if err != nil {
+		syncResult.Error = err
 	}
 
-	syncResult := &interfaces.EnvSyncResult{}
-	switch task.RuntimeType {
-	case interfaces.RUNTIME_TYPE_DEPLOYMENT:
-		repos, err := m.getRepos(ctx, task)
-		if err != nil {
-			syncResult.Error = err
-			break
-		}
-
-		err = destCluster.SyncRepo(ctx, repos)
-		if err != nil {
-			syncResult.Error = err
-			break
-		}
-
+	err = destCluster.SyncRepo(ctx, repos)
+	if err != nil {
+		syncResult.Error = err
 	}
 
 	return syncResult, nil
 }
 
 // Remove will cleaa up resouces Sync create.
-func (m Syncer) Remove(ctx context.Context, task interfaces.DeployTask) error {
+func (m Syncer) Remove(ctx context.Context, task interfaces.RuntimeSyncTask) error {
 	logger := log.FromContext(ctx)
 
 	destCluster, err := newDestCluster(ctx, task)
@@ -112,11 +106,7 @@ func (m Syncer) Remove(ctx context.Context, task interfaces.DeployTask) error {
 		return fmt.Errorf("create dest cluster client failed: %w", err)
 	}
 
-	if err := destCluster.DeleteRole(ctx); err != nil {
-		return fmt.Errorf("delete role failed: %w", err)
-	}
-
-	if err := destCluster.deleteNamespace(ctx); err != nil {
+	if err := destCluster.deleteNamespace(ctx, task.Runtime.GetName()); err != nil {
 		return fmt.Errorf("delete runtime namespace failed: %w", err)
 	}
 
@@ -126,7 +116,12 @@ func (m Syncer) Remove(ctx context.Context, task interfaces.DeployTask) error {
 	}
 	if deletable {
 		logger.V(1).Info("threre are no namespace under product namespace , it will be delete", "NamespaceName", task.Product.Name)
-		if err := destCluster.deleteProductNamespace(ctx); err != nil {
+
+		productCodeRepo, err := getProductCodeRepo(ctx, m.Client, task.Product.Name, task.NautesCfg.Nautes.Namespace)
+		if err != nil {
+			return fmt.Errorf("get product coderepo failed: %w", err)
+		}
+		if err := destCluster.deleteProductNamespace(ctx, productCodeRepo); err != nil {
 			return fmt.Errorf("delete product namespace failed: %w", err)
 		}
 	}
@@ -134,7 +129,7 @@ func (m Syncer) Remove(ctx context.Context, task interfaces.DeployTask) error {
 	return nil
 }
 
-func (m Syncer) getRepos(ctx context.Context, task interfaces.DeployTask) ([]interfaces.SecretInfo, error) {
+func (m Syncer) getRepos(ctx context.Context, task interfaces.RuntimeSyncTask) ([]interfaces.SecretInfo, error) {
 	artifactRepos := &nautescrd.ArtifactRepoList{}
 	listOpts := []client.ListOption{
 		client.InNamespace(task.Product.Name),
@@ -167,4 +162,21 @@ func (m Syncer) getRepos(ctx context.Context, task interfaces.DeployTask) ([]int
 	}
 
 	return repos, nil
+}
+
+func getProductCodeRepo(ctx context.Context, k8sClient client.Client, productName, nautesNamespace string) (*nautescrd.CodeRepo, error) {
+	coderepoList := &nautescrd.CodeRepoList{}
+	listOpts := []client.ListOption{
+		client.MatchingLabels(map[string]string{nautescrd.LABEL_FROM_PRODUCT: productName}),
+		client.InNamespace(nautesNamespace),
+	}
+	if err := k8sClient.List(ctx, coderepoList, listOpts...); err != nil {
+		return nil, fmt.Errorf("get product %s code repo failed: %w", productName, err)
+	}
+	if len(coderepoList.Items) != 1 {
+		return nil, fmt.Errorf("product %s code repo is not unique", productName)
+	}
+	productCodeRepo := coderepoList.Items[0]
+
+	return &productCodeRepo, nil
 }

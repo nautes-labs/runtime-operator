@@ -41,16 +41,6 @@ func (*mock) GetRole(ctx context.Context, clusterName string, role runtimeinterf
 	return &role, nil
 }
 
-// GrantPermission implements interfaces.SecretClient
-func (*mock) GrantPermission(ctx context.Context, providerType string, repoName string, destUser string, destEnv string) error {
-	return nil
-}
-
-// RevokePermission implements interfaces.SecretClient
-func (*mock) RevokePermission(ctx context.Context, providerType string, repoName string, destUser string, destEnv string) error {
-	return nil
-}
-
 // GetSecretDatabaseName will return repo.CodeRepo.Permission as dbname
 func (*mock) GetSecretDatabaseName(ctx context.Context, repo runtimeinterface.SecretInfo) (string, error) {
 	dbName, ok := os.LookupEnv("TEST_SECRET_DB")
@@ -69,13 +59,13 @@ func (*mock) GetSecretKey(ctx context.Context, repo runtimeinterface.SecretInfo)
 	return key, nil
 }
 
-// GrantCodeRepoPermission implements interfaces.SecretClient
-func (*mock) GrantCodeRepoPermission(ctx context.Context, providerType string, repoName string, destUser string, destEnv string) error {
+// GrantPermission implements interfaces.SecretClient
+func (*mock) GrantPermission(ctx context.Context, repo runtimeinterface.SecretInfo, destUser string, destEnv string) error {
 	return nil
 }
 
-// RevokeCodeRepoPermission implements interfaces.SecretClient
-func (*mock) RevokeCodeRepoPermission(ctx context.Context, providerType string, repoName string, destUser string, destEnv string) error {
+// RevokePermission implements interfaces.SecretClient
+func (*mock) RevokePermission(ctx context.Context, repo runtimeinterface.SecretInfo, destUser string, destEnv string) error {
 	return nil
 }
 
@@ -93,4 +83,8 @@ func (m mock) GetAccessInfo(ctx context.Context, name string) (string, error) {
 
 func (m mock) Logout() error {
 	return nil
+}
+
+func (m mock) GetCABundle(ctx context.Context) (string, error) {
+	return "", nil
 }

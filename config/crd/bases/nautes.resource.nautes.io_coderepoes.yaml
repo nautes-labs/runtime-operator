@@ -15,7 +15,23 @@ spec:
     singular: coderepo
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.codeRepoProvider
+      name: PROVIDER
+      type: string
+    - jsonPath: .spec.product
+      name: PRODUCTRESOURCENAME
+      type: string
+    - jsonPath: .spec.project
+      name: PROJECT
+      type: string
+    - jsonPath: .spec.repoName
+      name: REPONAME
+      type: string
+    - jsonPath: .spec.url
+      name: URL
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: CodeRepo is the Schema for the coderepoes API
@@ -56,11 +72,8 @@ spec:
                     items:
                       type: string
                     type: array
-                  isolation:
-                    type: string
                 required:
                 - events
-                - isolation
                 type: object
             type: object
           status:

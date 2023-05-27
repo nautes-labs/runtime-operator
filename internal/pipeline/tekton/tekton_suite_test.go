@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kubernetes_test
+package tekton_test
 
 import (
 	"context"
@@ -24,15 +24,21 @@ import (
 	"testing"
 	"time"
 
-	externalsecretcrd "github.com/external-secrets/external-secrets/apis/externalsecrets/v1alpha1"
-	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
-	convert "github.com/nautes-labs/pkg/pkg/kubeconvert"
-	nautescfg "github.com/nautes-labs/pkg/pkg/nautesconfigs"
-	secmock "github.com/nautes-labs/runtime-operator/internal/secret/mock"
-	secprovider "github.com/nautes-labs/runtime-operator/internal/secret/provider"
-	runtimecontext "github.com/nautes-labs/runtime-operator/pkg/context"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
+
+	convert "github.com/nautes-labs/pkg/pkg/kubeconvert"
+
+	nautescfg "github.com/nautes-labs/pkg/pkg/nautesconfigs"
+
+	secmock "github.com/nautes-labs/runtime-operator/internal/secret/mock"
+
+	secprovider "github.com/nautes-labs/runtime-operator/internal/secret/provider"
+
+	runtimecontext "github.com/nautes-labs/runtime-operator/pkg/context"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,14 +48,18 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	argocdv1alpha1 "github.com/argoproj/argo-cd/v2/pkg/apis/application/v1alpha1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	hncv1alpha2 "sigs.k8s.io/hierarchical-namespaces/api/v1alpha2"
 )
 
 func TestKubernetes(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Kubernetes Suite")
+	RunSpecs(t, "Tekton Suite")
 }
 
 var cfg *rest.Config
@@ -58,6 +68,9 @@ var testEnv *envtest.Environment
 var ctx context.Context
 var nautesCFG *nautescfg.Config
 var mockK8SClient *mockClient
+var nautesNamespace = "nautes"
+var argoCDNamespace = "argocd"
+var logger = logf.Log.WithName("teskton-test")
 
 var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
@@ -74,13 +87,15 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(cfg).NotTo(BeNil())
 
-	err = externalsecretcrd.AddToScheme(scheme.Scheme)
+	err = argocdv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 	err = hncv1alpha2.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 	err = nautescrd.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 	err = corev1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+	err = rbacv1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	//+kubebuilder:scaffold:scheme
@@ -123,14 +138,14 @@ secret:
 	Expect(err).Should(BeNil())
 	ctx = runtimecontext.NewSecretClientContext(ctx, secClient)
 
-	k8sClient.Create(ctx, &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "nautes",
-		},
-	})
-
 	mockK8SClient = &mockClient{}
 
+	err = k8sClient.Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: argoCDNamespace,
+		},
+	})
+	Expect(err).Should(BeNil())
 }
 
 func randNum() string {
@@ -150,29 +165,56 @@ func isNotTerminatingAndBelongsToProduct(res client.Object, productName string) 
 }
 
 type mockClient struct {
-	ArtifactProvider *nautescrd.ArtifactRepoProvider
-	ArtifactRepos    []nautescrd.ArtifactRepo
-	CodeRepos        []nautescrd.CodeRepo
+	coderepoProviders []*nautescrd.CodeRepoProvider
+	coderepos         []*nautescrd.CodeRepo
+	productName       string
+	runtimes          []*nautescrd.ProjectPipelineRuntime
 }
 
 func (c *mockClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object) error {
-	obj.(*nautescrd.ArtifactRepoProvider).ObjectMeta = c.ArtifactProvider.ObjectMeta
-	obj.(*nautescrd.ArtifactRepoProvider).Spec = c.ArtifactProvider.Spec
-	return nil
+	if key.Name == "" {
+		return fmt.Errorf("key is empty")
+	}
+
+	switch res := obj.(type) {
+	case *nautescrd.CodeRepo:
+		for _, coderepo := range c.coderepos {
+			if coderepo.Name == key.Name && coderepo.Namespace == key.Namespace {
+				coderepo.DeepCopyInto(res)
+				return nil
+			}
+		}
+		return fmt.Errorf("coderepo %s not found", key.Name)
+	case *nautescrd.CodeRepoProvider:
+		for _, provider := range c.coderepoProviders {
+			if provider.Name == key.Name && provider.Namespace == key.Namespace {
+				provider.DeepCopyInto(res)
+				return nil
+			}
+		}
+		return fmt.Errorf("coderepo provider %s not found", key.Name)
+	default:
+		return fmt.Errorf("unknow obj type")
+	}
 }
 
 func (c *mockClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-	switch obj := list.(type) {
+	switch v := list.(type) {
 	case *nautescrd.CodeRepoList:
-		for _, coderepo := range c.CodeRepos {
-			obj.Items = append(obj.Items, coderepo)
+		for _, coderepo := range c.coderepos {
+			// This should return default.project's coderepo
+			if coderepo.Namespace == nautesNamespace {
+				v.Items = append(v.Items, *coderepo)
+			}
 		}
-		return nil
-	case *nautescrd.ArtifactRepoList:
-		list.(*nautescrd.ArtifactRepoList).Items = c.ArtifactRepos
-		return nil
+	case *nautescrd.ProjectPipelineRuntimeList:
+		for _, runtime := range c.runtimes {
+			v.Items = append(v.Items, *runtime)
+		}
+	default:
+		return fmt.Errorf("unknow list type")
 	}
-	return fmt.Errorf("unknow list type")
+	return nil
 }
 
 func (c *mockClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {

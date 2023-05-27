@@ -37,6 +37,10 @@ const (
 	_ARGOCD_RBAC_ConfigMap_Name = "argocd-rbac-cm"
 )
 
+const (
+	codeRepoUserDefault = "default"
+)
+
 type Syncer struct {
 	K8sClient client.Client
 }
@@ -45,7 +49,7 @@ var (
 	kubernetesDefaultService = "https://kubernetes.default.svc"
 )
 
-func (d Syncer) Deploy(ctx context.Context, task interfaces.DeployTask) (*interfaces.DeployInfo, error) {
+func (d Syncer) Deploy(ctx context.Context, task interfaces.RuntimeSyncTask) (*interfaces.DeployInfo, error) {
 	history, repoName, destCluster, appProject, app, appSource, policyManager, err := d.initNames(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("init var faled: %w", err)
@@ -87,7 +91,7 @@ func (d Syncer) Deploy(ctx context.Context, task interfaces.DeployTask) (*interf
 	return &interfaces.DeployInfo{Source: repoURL}, nil
 }
 
-func (d Syncer) UnDeploy(ctx context.Context, task interfaces.DeployTask) error {
+func (d Syncer) UnDeploy(ctx context.Context, task interfaces.RuntimeSyncTask) error {
 	history, repoName, destCluster, appProject, app, _, policyManager, err := d.initNames(ctx, task)
 	if err != nil {
 		return fmt.Errorf("init var faled: %w", err)
@@ -137,7 +141,7 @@ func (d Syncer) UnDeploy(ctx context.Context, task interfaces.DeployTask) error 
 	return nil
 }
 
-func (d Syncer) initNames(ctx context.Context, task interfaces.DeployTask) (
+func (d Syncer) initNames(ctx context.Context, task interfaces.RuntimeSyncTask) (
 	history *nautescrd.DeployHistory,
 	repoName string,
 	cluster *destCluster,
@@ -222,7 +226,17 @@ func (d Syncer) syncCodeRepo(ctx context.Context, productName, repoName string, 
 	if !ok {
 		return "", fmt.Errorf("can not find argo operator name in nautes config")
 	}
-	err = secClient.GrantPermission(ctx, providerType, repoName, roleName, dest.name)
+
+	secret := interfaces.SecretInfo{
+		Type: interfaces.SECRET_TYPE_GIT,
+		CodeRepo: &interfaces.CodeRepo{
+			ProviderType: providerType,
+			ID:           repoName,
+			User:         codeRepoUserDefault,
+			Permission:   interfaces.CodeRepoPermissionReadOnly,
+		},
+	}
+	err = secClient.GrantPermission(ctx, secret, roleName, dest.name)
 	if err != nil {
 		return "", fmt.Errorf("grant permission to argo operator failed: %w", err)
 	}
@@ -288,7 +302,17 @@ func (d Syncer) deleteCodeRepo(ctx context.Context, productName, repoName string
 	if !ok {
 		return fmt.Errorf("can not find argo operator name in nautes config")
 	}
-	err = secClient.RevokePermission(ctx, providerType, repoName, roleName, dest.name)
+
+	secret := interfaces.SecretInfo{
+		Type: interfaces.SECRET_TYPE_GIT,
+		CodeRepo: &interfaces.CodeRepo{
+			ProviderType: providerType,
+			ID:           repoName,
+			User:         codeRepoUserDefault,
+			Permission:   interfaces.CodeRepoPermissionReadOnly,
+		},
+	}
+	err = secClient.RevokePermission(ctx, secret, roleName, dest.name)
 	if err != nil {
 		return fmt.Errorf("revoke permission failed: %w", err)
 	}

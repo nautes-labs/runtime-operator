@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kubernetes_test
+package argoevents_test
 
 import (
 	"context"
@@ -24,6 +24,8 @@ import (
 	"testing"
 	"time"
 
+	eventsourcev1alpha1 "github.com/argoproj/argo-events/pkg/apis/eventsource/v1alpha1"
+	sensorv1alpha1 "github.com/argoproj/argo-events/pkg/apis/sensor/v1alpha1"
 	externalsecretcrd "github.com/external-secrets/external-secrets/apis/externalsecrets/v1alpha1"
 	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
 	convert "github.com/nautes-labs/pkg/pkg/kubeconvert"
@@ -34,9 +36,12 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/kubectl/pkg/scheme"
@@ -74,13 +79,19 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(cfg).NotTo(BeNil())
 
+	err = clientgoscheme.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+	err = corev1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+	err = eventsourcev1alpha1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
 	err = externalsecretcrd.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 	err = hncv1alpha2.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 	err = nautescrd.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
-	err = corev1.AddToScheme(scheme.Scheme)
+	err = sensorv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	//+kubebuilder:scaffold:scheme
@@ -123,14 +134,30 @@ secret:
 	Expect(err).Should(BeNil())
 	ctx = runtimecontext.NewSecretClientContext(ctx, secClient)
 
-	k8sClient.Create(ctx, &corev1.Namespace{
+	mockK8SClient = &mockClient{}
+
+	err = k8sClient.Create(ctx, &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "nautes",
+			Name: "argo-events",
 		},
 	})
 
-	mockK8SClient = &mockClient{}
-
+	cm := corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nautes-runtime-trigger-templates",
+			Namespace: "nautes",
+		},
+		Data: map[string]string{
+			"base": `apiVersion: v1
+kind: ConfigMap
+metadata:
+name: nautes-runtime-trigger-templates
+namespace: nautes`,
+		},
+	}
+	fakeConfigMap = map[string]corev1.ConfigMap{
+		cm.Name: cm,
+	}
 }
 
 func randNum() string {
@@ -152,27 +179,69 @@ func isNotTerminatingAndBelongsToProduct(res client.Object, productName string) 
 type mockClient struct {
 	ArtifactProvider *nautescrd.ArtifactRepoProvider
 	ArtifactRepos    []nautescrd.ArtifactRepo
-	CodeRepos        []nautescrd.CodeRepo
 }
 
+var (
+	fakeCodeRepos map[string]nautescrd.CodeRepo
+	fakeProducts  map[string]nautescrd.Product
+	fakeProvider  nautescrd.CodeRepoProvider = nautescrd.CodeRepoProvider{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-provider",
+			Namespace: "nautes",
+		},
+		Spec: nautescrd.CodeRepoProviderSpec{
+			HttpAddress:  "https://127.0.0.1",
+			SSHAddress:   "ssh://git@127.0.0.1:2222",
+			ApiServer:    "https://127.0.0.1",
+			ProviderType: "gitlab",
+		},
+	}
+	fakeConfigMap map[string]corev1.ConfigMap
+)
+
 func (c *mockClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object) error {
-	obj.(*nautescrd.ArtifactRepoProvider).ObjectMeta = c.ArtifactProvider.ObjectMeta
-	obj.(*nautescrd.ArtifactRepoProvider).Spec = c.ArtifactProvider.Spec
+	switch obj.(type) {
+	case *nautescrd.CodeRepo:
+		coderepo, ok := fakeCodeRepos[key.Name]
+		if !ok {
+			return apierrors.NewNotFound(schema.GroupResource{
+				Group:    "",
+				Resource: "",
+			}, key.Name)
+		}
+		obj.(*nautescrd.CodeRepo).ObjectMeta = coderepo.ObjectMeta
+		obj.(*nautescrd.CodeRepo).Spec = coderepo.Spec
+	case *nautescrd.CodeRepoProvider:
+		obj.(*nautescrd.CodeRepoProvider).ObjectMeta = fakeProvider.ObjectMeta
+		obj.(*nautescrd.CodeRepoProvider).Spec = fakeProvider.Spec
+	case *nautescrd.Product:
+		product, ok := fakeProducts[key.Name]
+		if !ok {
+			return apierrors.NewNotFound(schema.GroupResource{
+				Group:    "",
+				Resource: "",
+			}, key.Name)
+		}
+		obj.(*nautescrd.Product).ObjectMeta = product.ObjectMeta
+		obj.(*nautescrd.Product).Spec = product.Spec
+	case *corev1.ConfigMap:
+		cm, ok := fakeConfigMap[key.Name]
+		if !ok {
+			return apierrors.NewNotFound(schema.GroupResource{
+				Group:    "",
+				Resource: "",
+			}, key.Name)
+		}
+		obj.(*corev1.ConfigMap).ObjectMeta = cm.ObjectMeta
+		obj.(*corev1.ConfigMap).Data = cm.Data
+	default:
+		return apierrors.NewNotFound(schema.GroupResource{}, obj.GetName())
+	}
 	return nil
 }
 
 func (c *mockClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-	switch obj := list.(type) {
-	case *nautescrd.CodeRepoList:
-		for _, coderepo := range c.CodeRepos {
-			obj.Items = append(obj.Items, coderepo)
-		}
-		return nil
-	case *nautescrd.ArtifactRepoList:
-		list.(*nautescrd.ArtifactRepoList).Items = c.ArtifactRepos
-		return nil
-	}
-	return fmt.Errorf("unknow list type")
+	return nil
 }
 
 func (c *mockClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {

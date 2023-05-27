@@ -69,6 +69,14 @@ rules:
 - apiGroups:
   - nautes.resource.nautes.io
   resources:
+  - coderepobindings
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - nautes.resource.nautes.io
+  resources:
   - coderepoes
   verbs:
   - get
@@ -124,3 +132,29 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - nautes.resource.nautes.io
+  resources:
+  - projectpipelineruntimes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - nautes.resource.nautes.io
+  resources:
+  - projectpipelineruntimes/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - nautes.resource.nautes.io
+  resources:
+  - projectpipelineruntimes/status
+  verbs:
+  - get
+  - patch
+  - update

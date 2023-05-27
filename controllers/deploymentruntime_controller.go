@@ -44,9 +44,9 @@ import (
 )
 
 const (
-	deployRuntimeFinalizerName   = "runtime.nautes.resource.nautes.io/finalizers"
-	deployRuntimeConditionType   = "RuntimeDeployed"
-	deployRuntimeConditionReason = "RegularUpdate"
+	runtimeFinalizerName   = "runtime.nautes.resource.nautes.io/finalizers"
+	runtimeConditionType   = "RuntimeDeployed"
+	runtimeConditionReason = "RegularUpdate"
 )
 
 const (
@@ -57,7 +57,7 @@ const (
 type DeploymentRuntimeReconciler struct {
 	client.Client
 	Scheme       *runtime.Scheme
-	Syncer       interfaces.DeploymentRuntimeSyncer
+	Syncer       interfaces.RuntimeSyncer
 	NautesConfig nautescfg.NautesConfigs
 }
 
@@ -104,13 +104,13 @@ func (r *DeploymentRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	defer secClient.Logout()
 
 	if !runtime.DeletionTimestamp.IsZero() {
-		if !controllerutil.ContainsFinalizer(runtime, deployRuntimeFinalizerName) {
+		if !controllerutil.ContainsFinalizer(runtime, runtimeFinalizerName) {
 			return ctrl.Result{}, nil
 		}
 
 		if runtime.Status.DeployHistory != nil {
-			if err := r.Syncer.Delete(ctx, *runtime); err != nil {
-				setStatus(runtime, nil, err)
+			if err := r.Syncer.Delete(ctx, runtime); err != nil {
+				setDeployRuntimeStatus(runtime, nil, err)
 				if err := r.Status().Update(ctx, runtime); err != nil {
 					logger.Error(err, "update status failed")
 				}
@@ -118,7 +118,7 @@ func (r *DeploymentRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			}
 		}
 
-		controllerutil.RemoveFinalizer(runtime, deployRuntimeFinalizerName)
+		controllerutil.RemoveFinalizer(runtime, runtimeFinalizerName)
 		if err := r.Update(ctx, runtime); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -130,13 +130,13 @@ func (r *DeploymentRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	controllerutil.AddFinalizer(runtime, deployRuntimeFinalizerName)
+	controllerutil.AddFinalizer(runtime, runtimeFinalizerName)
 	if err := r.Update(ctx, runtime); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	deployInfo, err := r.Syncer.Sync(ctx, *runtime)
-	setStatus(runtime, deployInfo, err)
+	deployInfo, err := r.Syncer.Sync(ctx, runtime)
+	setDeployRuntimeStatus(runtime, deployInfo, err)
 
 	if err := r.Status().Update(ctx, runtime); err != nil {
 		return ctrl.Result{}, err
@@ -192,22 +192,22 @@ func (r *DeploymentRuntimeReconciler) findDeploymentRuntimeForCoderepo(coderepo 
 	return requests
 }
 
-func setStatus(runtime *nautescrd.DeploymentRuntime, result *interfaces.DeployInfo, err error) {
+func setDeployRuntimeStatus(runtime *nautescrd.DeploymentRuntime, result *interfaces.DeployInfo, err error) {
 	if err != nil {
 		condition := metav1.Condition{
-			Type:    deployRuntimeConditionType,
+			Type:    runtimeConditionType,
 			Status:  "False",
-			Reason:  deployRuntimeConditionReason,
+			Reason:  runtimeConditionReason,
 			Message: err.Error(),
 		}
-		runtime.Status.Conditions = nautescrd.GetNewConditions(runtime.Status.Conditions, []metav1.Condition{condition}, map[string]bool{deployRuntimeConditionType: true})
+		runtime.Status.Conditions = nautescrd.GetNewConditions(runtime.Status.Conditions, []metav1.Condition{condition}, map[string]bool{runtimeConditionType: true})
 	} else {
 		condition := metav1.Condition{
-			Type:   deployRuntimeConditionType,
+			Type:   runtimeConditionType,
 			Status: "True",
-			Reason: deployRuntimeConditionReason,
+			Reason: runtimeConditionReason,
 		}
-		runtime.Status.Conditions = nautescrd.GetNewConditions(runtime.Status.Conditions, []metav1.Condition{condition}, map[string]bool{deployRuntimeConditionType: true})
+		runtime.Status.Conditions = nautescrd.GetNewConditions(runtime.Status.Conditions, []metav1.Condition{condition}, map[string]bool{runtimeConditionType: true})
 
 		if result != nil {
 			runtime.Status.DeployHistory = &nautescrd.DeployHistory{

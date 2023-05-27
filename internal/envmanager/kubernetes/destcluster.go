@@ -33,11 +33,13 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	hncv1alpha2 "sigs.k8s.io/hierarchical-namespaces/api/v1alpha2"
 
 	externalsecretcrd "github.com/external-secrets/external-secrets/apis/externalsecrets/v1alpha1"
 
 	esmetav1 "github.com/external-secrets/external-secrets/apis/meta/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -61,7 +63,6 @@ const (
 )
 
 var (
-	defaultServiceAccount = "nautes-service-account"
 	// external secret format stander string + db name + repo ID
 	externalSecretNameFormat = "nautes-external-secret-%s-%s"
 	// secret format stander string + db name + repo ID
@@ -95,17 +96,18 @@ type cluster struct {
 }
 
 type destCluster struct {
-	Product         product
-	Cluster         cluster
-	Runtime         runtimeinterface.Runtime
-	cfg             nautescfg.Config
-	resouceLable    map[string]string
-	SecretStoreType string
-	secClient       runtimeinterface.SecretClient
-	k8sClient       client.Client
+	Product            product
+	Cluster            cluster
+	Runtime            runtimeinterface.Runtime
+	cfg                nautescfg.Config
+	resouceLable       map[string]string
+	SecretStoreType    string
+	secClient          runtimeinterface.SecretClient
+	k8sClient          client.Client
+	serviceAccountName string
 }
 
-func newDestCluster(ctx context.Context, task runtimeinterface.DeployTask) (*destCluster, error) {
+func newDestCluster(ctx context.Context, task runtimeinterface.RuntimeSyncTask) (*destCluster, error) {
 	if task.AccessInfo.Type != runtimeinterface.ACCESS_TYPE_K8S {
 		return nil, fmt.Errorf("access type is not supported")
 	}
@@ -130,23 +132,88 @@ func newDestCluster(ctx context.Context, task runtimeinterface.DeployTask) (*des
 			ProductNamespace: task.Product.Name,
 			Namespace:        task.Runtime.GetName(),
 		},
-		Runtime:         task.Runtime,
-		cfg:             task.NautesCfg,
-		resouceLable:    task.GetLabel(),
-		SecretStoreType: string(task.NautesCfg.Secret.RepoType),
-		secClient:       secClient,
-		k8sClient:       k8sClient,
+		Runtime:            task.Runtime,
+		cfg:                task.NautesCfg,
+		resouceLable:       task.GetLabel(),
+		serviceAccountName: task.ServiceAccountName,
+		SecretStoreType:    string(task.NautesCfg.Secret.RepoType),
+		secClient:          secClient,
+		k8sClient:          k8sClient,
 	}
 
 	return cluster, nil
 }
 
-func (c *destCluster) syncProductNamespace(ctx context.Context) error {
-	return c.syncNamespace(ctx, c.Product.Name)
+func (c *destCluster) syncProductNamespace(ctx context.Context, codeRepo *nautescrd.CodeRepo) error {
+	namespaceName := c.Product.Name
+	if codeRepo == nil {
+		return fmt.Errorf("product code repo can not be nil")
+	}
+
+	if err := c.syncNamespace(ctx, namespaceName); err != nil {
+		return fmt.Errorf("sync namespace %s failed: %w", namespaceName, err)
+	}
+
+	codeRepo.Namespace = c.cfg.Nautes.Namespace
+	if err := c.syncCodeRepo(ctx, *codeRepo); err != nil {
+		return fmt.Errorf("sync code repo %s failed: %w", codeRepo.Name, err)
+	}
+
+	return nil
 }
 
-func (c *destCluster) syncRuntimeNamespace(ctx context.Context) error {
-	return c.syncNamespace(ctx, c.Runtime.GetName())
+const (
+	SecretNameSecretStoreCA = "ca"
+	secretKeySecretStoreCA  = "ca.crt"
+)
+
+func (c *destCluster) syncRuntimeNamespace(ctx context.Context, codeRepo *nautescrd.CodeRepo) error {
+	namespaceName := c.Runtime.GetName()
+	if err := c.syncNamespace(ctx, namespaceName); err != nil {
+		return fmt.Errorf("sync namespace %s failed: %w", namespaceName, err)
+	}
+
+	if err := c.SyncRole(ctx, namespaceName); err != nil {
+		return fmt.Errorf("sync role %s failed: %w", namespaceName, err)
+	}
+
+	if err := c.syncCA(ctx, namespaceName); err != nil {
+		return fmt.Errorf("sync secret store ca failed: %w", err)
+	}
+
+	return nil
+}
+
+func (c *destCluster) syncCA(ctx context.Context, namespaceName string) error {
+	ca, err := c.secClient.GetCABundle(ctx)
+	if err != nil {
+		return fmt.Errorf("get secret store ca bundle failed: %w", err)
+	}
+	secretStoreCASecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      SecretNameSecretStoreCA,
+			Namespace: namespaceName,
+		},
+	}
+
+	if ca != "" {
+		_, err := controllerutil.CreateOrUpdate(ctx, c.k8sClient, secretStoreCASecret, func() error {
+			secretStoreCASecret.Data = map[string][]byte{
+				secretKeySecretStoreCA: []byte(ca),
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	} else {
+		err := c.k8sClient.Delete(ctx, secretStoreCASecret)
+		if client.IgnoreNotFound(err) != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (c *destCluster) syncNamespace(ctx context.Context, name string) error {
@@ -176,6 +243,20 @@ func (c *destCluster) syncNamespace(ctx context.Context, name string) error {
 	}
 
 	return nil
+}
+
+func (c *destCluster) syncCodeRepo(ctx context.Context, coderepo nautescrd.CodeRepo) error {
+	newCodeRepo := &nautescrd.CodeRepo{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      coderepo.Name,
+			Namespace: coderepo.Namespace,
+		},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, c.k8sClient, newCodeRepo, func() error {
+		newCodeRepo.Spec = coderepo.Spec
+		return nil
+	})
+	return err
 }
 
 func (c *destCluster) syncRelationShip(ctx context.Context) error {
@@ -273,10 +354,10 @@ func (c *destCluster) syncAuthority(ctx context.Context, namespace, groupName st
 	return c.k8sClient.Update(ctx, roleBinding)
 }
 
-func (c *destCluster) deleteNamespace(ctx context.Context) error {
+func (c *destCluster) deleteNamespace(ctx context.Context, namespaceName string) error {
 	namespace := &corev1.Namespace{}
 	key := types.NamespacedName{
-		Name: c.Runtime.GetName(),
+		Name: namespaceName,
 	}
 
 	err := c.k8sClient.Get(ctx, key, namespace)
@@ -290,6 +371,10 @@ func (c *destCluster) deleteNamespace(ctx context.Context) error {
 
 	if !utils.IsBelongsToProduct(namespace, c.Product.Name) {
 		return nil
+	}
+
+	if err := c.DeleteRole(ctx, key.Name); err != nil {
+		return fmt.Errorf("delete role failed: %w", err)
 	}
 
 	return c.k8sClient.Delete(ctx, namespace)
@@ -341,24 +426,20 @@ func (c *destCluster) checkProductNamespaceIsUsing(ctx context.Context) (bool, e
 	return len(children) == 0, nil
 }
 
-func (c *destCluster) deleteProductNamespace(ctx context.Context) error {
-	ns := &corev1.Namespace{}
-	key := types.NamespacedName{
-		Name: c.Product.Name,
+func (c *destCluster) deleteProductNamespace(ctx context.Context, codeRepo *nautescrd.CodeRepo) error {
+	codeRepo.Namespace = c.cfg.Nautes.Namespace
+	err := c.k8sClient.Delete(ctx, codeRepo)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get product coderepo failed: %w", err)
 	}
-
-	if err := c.k8sClient.Get(ctx, key, ns); err != nil {
-		return client.IgnoreNotFound(err)
-	}
-
-	return c.k8sClient.Delete(ctx, ns)
+	return c.deleteNamespace(ctx, c.Product.Name)
 }
 
-func (c *destCluster) SyncRole(ctx context.Context) error {
+func (c *destCluster) SyncRole(ctx context.Context, namespaceName string) error {
 	sa := &corev1.ServiceAccount{}
 	key := types.NamespacedName{
-		Namespace: c.Cluster.Namespace,
-		Name:      defaultServiceAccount,
+		Namespace: namespaceName,
+		Name:      c.serviceAccountName,
 	}
 	if err := c.k8sClient.Get(ctx, key, sa); err != nil {
 		if client.IgnoreNotFound(err) != nil {
@@ -383,8 +464,8 @@ func (c *destCluster) SyncRole(ctx context.Context) error {
 	}
 
 	role := runtimeinterface.Role{
-		Name:   c.Runtime.GetName(),
-		Users:  []string{defaultServiceAccount},
+		Name:   key.Namespace,
+		Users:  []string{c.serviceAccountName},
 		Groups: []string{c.Cluster.Namespace},
 	}
 	clusterRole, err := c.secClient.GetRole(ctx, c.Cluster.Name, role)
@@ -397,18 +478,18 @@ func (c *destCluster) SyncRole(ctx context.Context) error {
 	return c.secClient.CreateRole(ctx, c.Cluster.Name, role)
 }
 
-func (c *destCluster) DeleteRole(ctx context.Context) error {
+func (c *destCluster) DeleteRole(ctx context.Context, namespaceName string) error {
 	key := types.NamespacedName{
-		Namespace: c.Cluster.Namespace,
-		Name:      defaultServiceAccount,
+		Namespace: namespaceName,
+		Name:      c.serviceAccountName,
 	}
 
 	if err := c.deleteResource(ctx, key, &corev1.ServiceAccount{}); err != nil {
 		return fmt.Errorf("delete service account failed: %w", err)
 	}
 	role := runtimeinterface.Role{
-		Name:   c.Runtime.GetName(),
-		Users:  []string{defaultServiceAccount},
+		Name:   key.Namespace,
+		Users:  []string{key.Name},
 		Groups: []string{c.Cluster.Namespace},
 	}
 
@@ -642,7 +723,7 @@ func (c destCluster) getVaultSecretStore(dbName string) *externalsecretcrd.Vault
 			Kubernetes: &externalsecretcrd.VaultKubernetesAuth{
 				Path: c.Cluster.Name,
 				ServiceAccountRef: &esmetav1.ServiceAccountSelector{
-					Name: defaultServiceAccount,
+					Name: c.serviceAccountName,
 				},
 				Role: c.Runtime.GetName(),
 			},

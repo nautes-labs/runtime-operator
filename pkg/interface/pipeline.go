@@ -16,20 +16,7 @@ package interfaces
 
 import "context"
 
-// nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
-
-const (
-	RUNTIME_TYPE_DEPLOYMENT RuntimeType = "deployment"
-	RUNTIME_TYPE_PIPELINE   RuntimeType = "pipeline"
-)
-
-type RuntimeType string
-
-type Deployment interface {
-	Deploy(ctx context.Context, task RuntimeSyncTask) (*DeployInfo, error)
-	UnDeploy(ctx context.Context, task RuntimeSyncTask) error
-}
-
-type DeployInfo struct {
-	Source string
+type Pipeline interface {
+	DeployPipelineRuntime(ctx context.Context, task RuntimeSyncTask) error
+	UnDeployPipelineRuntime(ctx context.Context, task RuntimeSyncTask) error
 }
