@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![golang](https://img.shields.io/badge/golang-v1.17.13-brightgreen)](https://go.dev/doc/install)
-[![version](https://img.shields.io/badge/version-v0.2.0-green)]()
+[![version](https://img.shields.io/badge/version-v0.3.0-green)]()
 
 Runtime Operator 项目提供了一组用于调谐 Project Pipeline Runtime 资源和 Deployment Runtime 资源事件的 Controller，调谐内容主要是根据两类运行时资源的声明信息，在目标集群上同步流水线执行或应用部署所需的基础环境。
 
@@ -22,7 +22,13 @@ Controller 会根据 Deployment Runtime 资源引用的 Environment 资源找到
 
 ### 同步流水线运行时
 
-开发中……
+Controller 会根据 Project Pipeline Runtime 资源引用的 Environment 资源找到运行时的目标集群，并在此集群上完成以下操作：
+
+- 创建产品和流水线运行时的命名空间。
+- 根据资源中定义的 Event Sources 在运行时环境中注册事件监听。
+- 根据资源中定义的 Piptline Triggers 在运行时环境中创建流水线触发器。触发器会根据注册事件创建流水线实例。
+- 创建流水线模板同步程序，供产品中各个流水线使用。
+- 授权该产品下的用户管理流水线实例的权限。
 
 ## 快速开始
 
@@ -74,5 +80,5 @@ go install github.com/onsi/ginkgo/v2/ginkgo@v2.3.1
 执行单元测试
 
 ```shell
-ginkgo -r
+make test
 ```
