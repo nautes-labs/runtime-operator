@@ -22,13 +22,13 @@ Controller 会根据 Deployment Runtime 资源引用的 Environment 资源找到
 
 ### 同步流水线运行时
 
-Controller 会根据 Project Pipeline Runtime 资源引用的 Environment 资源找到运行时的目标集群，并在此集群上完成以下操作：
+- Controller 会根据 Project Pipeline Runtime 资源引用的 Environment 资源找到运行时的目标集群，并在此集群上完成以下操作：
 
-- 创建产品和流水线运行时的命名空间。
-- 根据资源中定义的 Event Sources 在运行时环境中注册事件监听。
-- 根据资源中定义的 Piptline Triggers 在运行时环境中创建流水线触发器。触发器会根据注册事件创建流水线实例。
-- 创建流水线模板同步程序，供产品中各个流水线使用。
-- 授权该产品下的用户管理流水线实例的权限。
+  - 创建产品和流水线运行时的命名空间。
+  - 根据运行时资源中定义的 Event Sources 创建事件监听器，监听器会接收 GitLab Webhook、Calender 等外部事件源产生的事件并将其转为内部事件。
+  - 根据运行时资源中定义的 Pipeline Triggers 创建流水线触发器，触发器会根据事件监听器发出的内部事件触发指定的流水线。
+  - 创建流水线模板同步程序，同步程序会将 default.project 项目指定路径下的流水线模板同步至集群，供产品中各个流水线使用。
+  - 授权该运行时所属产品下的用户管理流水线实例的权限。
 
 ## 快速开始
 
