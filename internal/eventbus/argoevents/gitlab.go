@@ -302,7 +302,7 @@ func (s *runtimeSyncer) calculateEventSourceGitlab(ctx context.Context, eventSou
 			},
 			EnableSSLVerification: false,
 			GitlabBaseURL:         codeRepoProvider.Spec.ApiServer,
-			DeleteHookOnFinish:    false,
+			DeleteHookOnFinish:    true,
 			Projects:              []string{getIDFromCodeRepo(codeRepo.Name)},
 			SecretToken: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{
