@@ -57,7 +57,7 @@ func (m Syncer) GetAccessInfo(ctx context.Context, cluster nautescrd.Cluster) (*
 }
 
 // Sync create or update a usable env for the next step, it will create namespaces, rolebinding and other resources runtime required.
-func (m Syncer) Sync(ctx context.Context, task interfaces.RuntimeSyncTask) (*interfaces.EnvSyncResult, error) {
+func (m Syncer) Sync(ctx context.Context, task interfaces.RuntimeSyncTask) (*interfaces.EnvironmentDeploymentResult, error) {
 	destCluster, err := newDestCluster(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("create dest cluster client failed: %w", err)
@@ -83,7 +83,7 @@ func (m Syncer) Sync(ctx context.Context, task interfaces.RuntimeSyncTask) (*int
 		return nil, fmt.Errorf("sync relationship namespace failed: %w", err)
 	}
 
-	syncResult := &interfaces.EnvSyncResult{}
+	syncResult := &interfaces.EnvironmentDeploymentResult{}
 	repos, err := m.getRepos(ctx, task)
 	if err != nil {
 		syncResult.Error = err

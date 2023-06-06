@@ -23,7 +23,7 @@ import (
 
 // RuntimeSyncer is use to deploy or clean up runtime in dest environment. It can handle any type of runtime.
 type RuntimeSyncer interface {
-	Sync(ctx context.Context, runtime Runtime) (*DeployInfo, error)
+	Sync(ctx context.Context, runtime Runtime) (*RuntimeDeploymentResult, error)
 	Delete(ctx context.Context, runtime Runtime) error
 }
 
@@ -42,6 +42,22 @@ type RuntimeSyncTask struct {
 	RuntimeType RuntimeType
 	// ServiceAccountName is the authorized account name in k8s, it can get secrets from secret store, create resource in runtime namespace, etc.
 	ServiceAccountName string
+}
+
+type RuntimeDeploymentResult struct {
+	Cluster                     string
+	App                         SelectedApp
+	DeploymentDeploymentResult  *DeploymentDeploymentResult
+	EnvironmentDeploymentResult *EnvironmentDeploymentResult
+	EventBusDeploymentResult    *EventBusDeploymentResult
+}
+
+// SelectedApp records the specific app name used during deployment.
+type SelectedApp struct {
+	Pipeline    string
+	Deploy      string
+	EventBus    string
+	Environment string
 }
 
 func (t *RuntimeSyncTask) GetLabel() map[string]string {

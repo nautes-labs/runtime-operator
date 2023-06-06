@@ -17,6 +17,8 @@ package interfaces
 import "context"
 
 type EventBus interface {
-	SyncEvents(ctx context.Context, task RuntimeSyncTask) (*DeployInfo, error)
+	SyncEvents(ctx context.Context, task RuntimeSyncTask) (*EventBusDeploymentResult, error)
 	RemoveEvents(ctx context.Context, task RuntimeSyncTask) error
 }
+
+type EventBusDeploymentResult struct{}

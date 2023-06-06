@@ -9,7 +9,7 @@ require (
 	github.com/go-kratos/kratos/v2 v2.5.0
 	github.com/hashicorp/vault/api v1.9.0
 	github.com/hashicorp/vault/api/auth/kubernetes v0.4.0
-	github.com/nautes-labs/pkg v0.3.0
+	github.com/nautes-labs/pkg v0.3.0-local.0.20230606061546-baf50a49e082
 	k8s.io/api v0.26.0
 	k8s.io/apimachinery v0.26.0
 	k8s.io/client-go v1.5.2

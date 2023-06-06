@@ -37,11 +37,11 @@ type AccessInfo struct {
 
 type EnvManager interface {
 	GetAccessInfo(ctx context.Context, cluster nautescrd.Cluster) (*AccessInfo, error)
-	Sync(ctx context.Context, task RuntimeSyncTask) (*EnvSyncResult, error)
+	Sync(ctx context.Context, task RuntimeSyncTask) (*EnvironmentDeploymentResult, error)
 	Remove(ctx context.Context, task RuntimeSyncTask) error
 }
 
-type EnvSyncResult struct {
+type EnvironmentDeploymentResult struct {
 	AdditionalResources []AdditionalResource
 	Error               error
 }

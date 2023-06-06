@@ -26,10 +26,10 @@ const (
 type RuntimeType string
 
 type Deployment interface {
-	Deploy(ctx context.Context, task RuntimeSyncTask) (*DeployInfo, error)
+	Deploy(ctx context.Context, task RuntimeSyncTask) (*DeploymentDeploymentResult, error)
 	UnDeploy(ctx context.Context, task RuntimeSyncTask) error
 }
 
-type DeployInfo struct {
+type DeploymentDeploymentResult struct {
 	Source string
 }
