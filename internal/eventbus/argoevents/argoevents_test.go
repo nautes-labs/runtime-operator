@@ -302,7 +302,11 @@ var _ = Describe("Argoevents", func() {
 		err = k8sClient.List(ctx, esList)
 		Expect(err).Should(BeNil())
 		Expect(len(esList.Items)).Should(Equal(1))
-		evName := runtime.Spec.EventSources[0].Gitlab.RepoName
+		evName := fmt.Sprintf("%s-%s-%s",
+			runtime.Name,
+			runtime.Spec.PipelineTriggers[0].EventSource,
+			runtime.Spec.PipelineTriggers[0].Pipeline,
+		)
 		isSame := reflect.DeepEqual(esList.Items[0].Spec.Gitlab[evName].Events, []string{"PushEvents"})
 		Expect(isSame).Should(BeTrue())
 

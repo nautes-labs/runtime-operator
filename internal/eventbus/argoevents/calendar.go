@@ -30,7 +30,7 @@ func (s *runtimeSyncer) syncEventSourceCalendar(ctx context.Context) error {
 		return err
 	}
 
-	spec, err := s.calculateEventSourceCalendar(ctx, s.runtime.Spec.EventSources)
+	spec, err := s.calculateEventSourceCalendar(ctx, s.runtime.Spec.EventSources, s.runtime.Spec.PipelineTriggers)
 	if err != nil {
 		return fmt.Errorf("sync gitlab event source failed: %w", err)
 	}
@@ -53,17 +53,30 @@ func (s *runtimeSyncer) deleteEventSourceCalendar(ctx context.Context) error {
 	return s.deleteEventSource(ctx, eventSourceName)
 }
 
-func (s *runtimeSyncer) calculateEventSourceCalendar(ctx context.Context, eventSources []nautescrd.EventSource) (*eventsourcev1alpha1.EventSourceSpec, error) {
+func (s *runtimeSyncer) calculateEventSourceCalendar(ctx context.Context, eventSources []nautescrd.EventSource, triggers []nautescrd.PipelineTrigger) (*eventsourcev1alpha1.EventSourceSpec, error) {
 	eventSourceSpec := &eventsourcev1alpha1.EventSourceSpec{
 		Calendar: map[string]eventsourcev1alpha1.CalendarEventSource{},
 	}
 
+	evsrcs := map[string]nautescrd.EventSource{}
 	for _, evsrc := range s.runtime.Spec.EventSources {
 		if evsrc.Calendar == nil {
 			continue
 		}
+		evsrcs[evsrc.Name] = evsrc
+	}
 
-		eventName, err := getStringFromTemplate(tmplEventSourceCalendarEventName, map[string]string{"eventName": evsrc.Name})
+	for _, trigger := range triggers {
+		evsrc, ok := evsrcs[trigger.EventSource]
+		if !ok {
+			continue
+		}
+
+		vars := deepCopyStringMap(s.vars)
+		vars[keyEventName] = trigger.EventSource
+		vars[keyPipelineName] = trigger.Pipeline
+
+		eventName, err := getStringFromTemplate(tmplEventSourceCalendarEventName, vars)
 		if err != nil {
 			return nil, err
 		}
@@ -74,6 +87,7 @@ func (s *runtimeSyncer) calculateEventSourceCalendar(ctx context.Context, eventS
 			ExclusionDates: evsrc.Calendar.ExclusionDates,
 			Timezone:       evsrc.Calendar.Timezone,
 		}
+
 	}
 
 	if len(eventSourceSpec.Calendar) == 0 {

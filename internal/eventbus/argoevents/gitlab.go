@@ -41,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	esmetav1 "github.com/external-secrets/external-secrets/apis/meta/v1"
 )
@@ -106,7 +107,7 @@ func (s *runtimeSyncer) syncEventSourceGitlab(ctx context.Context) error {
 		return err
 	}
 
-	spec, err := s.calculateEventSourceGitlab(ctx, s.runtime.Spec.EventSources)
+	spec, err := s.calculateEventSourceGitlab(ctx, s.runtime)
 	if err != nil {
 		return fmt.Errorf("calculate event source %s failed: %w", eventSourceName, err)
 	}
@@ -118,19 +119,40 @@ func (s *runtimeSyncer) syncEventSourceGitlab(ctx context.Context) error {
 		return fmt.Errorf("sync event source %s failed: %w", eventSourceName, err)
 	}
 
-	return s.syncEventSourceGitlabRelatedResources(ctx, eventSourceName)
-}
-
-func (s *runtimeSyncer) syncEventSourceGitlabRelatedResources(ctx context.Context, eventSourceName string) error {
-	eventSource := &eventsourcev1alpha1.EventSource{}
-	key := types.NamespacedName{
-		Namespace: s.config.EventBus.ArgoEvents.Namespace,
-		Name:      eventSourceName,
+	argoEventSource := &eventsourcev1alpha1.EventSource{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      eventSourceName,
+			Namespace: s.config.EventBus.ArgoEvents.Namespace,
+		},
 	}
-	if err := s.k8sClient.Get(ctx, key, eventSource); err != nil {
+
+	if err := s.k8sClient.Get(ctx, client.ObjectKeyFromObject(argoEventSource), argoEventSource); err != nil {
 		return fmt.Errorf("can not get event source: %w", err)
 	}
 
+	for _, nautesEventSource := range s.runtime.Spec.EventSources {
+		if nautesEventSource.Gitlab == nil {
+			continue
+		}
+
+		if err = s.grantPermissions(ctx, nautesEventSource.Gitlab.RepoName); err != nil {
+			return fmt.Errorf("grant permissions failed: %w", err)
+		}
+
+		if err := s.syncGitlabAccessToken(ctx, *nautesEventSource.Gitlab, argoEventSource); err != nil {
+			return fmt.Errorf("sync gitlab access token failed: %w", err)
+		}
+
+		if err := s.syncWebhookSecretToken(ctx, *nautesEventSource.Gitlab, argoEventSource); err != nil {
+			return fmt.Errorf("sync gitlab secret token failed: %w", err)
+		}
+
+	}
+
+	return s.syncEventSourceGitlabRelatedResources(ctx, argoEventSource)
+}
+
+func (s *runtimeSyncer) syncEventSourceGitlabRelatedResources(ctx context.Context, eventSource *eventsourcev1alpha1.EventSource) error {
 	vars := deepCopyStringMap(s.vars)
 	serviceName, err := getStringFromTemplate(tmplGitlabServiceName, vars)
 	if err != nil {
@@ -155,22 +177,6 @@ func (s *runtimeSyncer) syncEventSourceGitlabRelatedResources(ctx context.Contex
 	}
 	if err := s.syncEventSourceIngressGitlab(ctx, ingressName, eventSource, *ingresSpec); err != nil {
 		return fmt.Errorf("sync ingress %s failed: %w", ingressName, err)
-	}
-
-	if err = s.grantPermissions(ctx); err != nil {
-		return fmt.Errorf("grant permissions failed: %w", err)
-	}
-
-	for name, gitlabEvent := range eventSource.Spec.Gitlab {
-		accessTokenName := gitlabEvent.AccessToken.Name
-		if err := s.syncGitlabAccessToken(ctx, accessTokenName, name, eventSource); err != nil {
-			return fmt.Errorf("sync gitlab access token failed: %w", err)
-		}
-
-		secretTokenName := gitlabEvent.SecretToken.Name
-		if err := s.syncWebhookSecretToken(ctx, secretTokenName, eventSource); err != nil {
-			return fmt.Errorf("sync gitlab secret token failed: %w", err)
-		}
 	}
 
 	if err = s.removeExternalSecretExpireOwnerReference(ctx, eventSource); err != nil {
@@ -228,7 +234,126 @@ const (
 // calculateEventSourceGitlab create eventsource.gitlab spec.
 // It will loop eventsource in project pipeline eventsources, find out all eventsource witch "gitlab" is not null, and create one argo eventsource.gitlab.
 // If gitlab type eventsource is not found, it will return nil.
-func (s *runtimeSyncer) calculateEventSourceGitlab(ctx context.Context, eventSources []nautescrd.EventSource) (*eventsourcev1alpha1.EventSourceSpec, error) {
+func (s *runtimeSyncer) calculateEventSourceGitlab(ctx context.Context, runtime nautescrd.ProjectPipelineRuntime) (*eventsourcev1alpha1.EventSourceSpec, error) {
+	eventSources := runtime.Spec.EventSources
+	triggers := runtime.Spec.PipelineTriggers
+	eventSourceSpec := getGitlabEventSourceBase()
+
+	codeRepos := map[string]*nautescrd.CodeRepo{}
+	codeRepoProviders := map[string]*nautescrd.CodeRepoProvider{}
+	mapEventSources := map[string]nautescrd.EventSource{}
+	for _, evsrc := range eventSources {
+		if evsrc.Gitlab == nil {
+			continue
+		}
+		mapEventSources[evsrc.Name] = evsrc
+
+		if codeRepos[evsrc.Gitlab.RepoName] != nil {
+			continue
+		}
+
+		codeRepo := &nautescrd.CodeRepo{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      evsrc.Gitlab.RepoName,
+				Namespace: s.productName,
+			}}
+		if err := s.tenantK8sClient.Get(ctx, client.ObjectKeyFromObject(codeRepo), codeRepo); err != nil {
+			return nil, err
+		}
+		codeRepos[evsrc.Gitlab.RepoName] = codeRepo
+
+		providerName := codeRepos[evsrc.Gitlab.RepoName].Spec.CodeRepoProvider
+		if codeRepoProviders[providerName] != nil {
+			continue
+		}
+
+		codeRepoProvider := &nautescrd.CodeRepoProvider{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      providerName,
+				Namespace: s.config.Nautes.Namespace,
+			}}
+		if err := s.tenantK8sClient.Get(ctx, client.ObjectKeyFromObject(codeRepoProvider), codeRepoProvider); err != nil {
+			return nil, err
+		}
+		codeRepoProviders[providerName] = codeRepoProvider
+	}
+
+	for _, trigger := range triggers {
+		vars := deepCopyStringMap(s.vars)
+		evsrc, ok := mapEventSources[trigger.EventSource]
+		if !ok {
+			continue
+		}
+
+		vars[keyRepoName] = evsrc.Gitlab.RepoName
+		vars[keyEventName] = trigger.EventSource
+		vars[keyPipelineName] = trigger.Pipeline
+
+		codeRepo := codeRepos[evsrc.Gitlab.RepoName]
+		codeRepoProvider := codeRepoProviders[codeRepo.Spec.CodeRepoProvider]
+
+		eventName, err := getStringFromTemplate(tmplEventSourceGitlabEventName, vars)
+		if err != nil {
+			return nil, err
+		}
+		accessTokenName, err := getStringFromTemplate(tmplGitlabAccessToken, vars)
+		if err != nil {
+			return nil, err
+		}
+		secretTokenName, err := getStringFromTemplate(tmplGitlabSecretToken, vars)
+		if err != nil {
+			return nil, err
+		}
+		endPoint, err := getStringFromTemplate(tmplGitlabEndPoint, vars)
+		if err != nil {
+			return nil, err
+		}
+		webhookEvents, err := getArgoEventSourceEventsFromCodeRepo(codeRepo.Spec.Webhook.Events)
+		if err != nil {
+			return nil, err
+		}
+
+		eventSourceSpec.Gitlab[eventName] = getGitlabEvent(endPoint, s, webhookEvents, accessTokenName, codeRepoProvider, codeRepo, secretTokenName)
+
+	}
+
+	if len(eventSourceSpec.Gitlab) == 0 {
+		return nil, nil
+	}
+
+	return eventSourceSpec, nil
+}
+
+func getGitlabEvent(endPoint string, s *runtimeSyncer, webhookEvents []string, accessTokenName string, codeRepoProvider *nautescrd.CodeRepoProvider, codeRepo *nautescrd.CodeRepo, secretTokenName string) eventsourcev1alpha1.GitlabEventSource {
+	x := eventsourcev1alpha1.GitlabEventSource{
+		Webhook: &eventsourcev1alpha1.WebhookContext{
+			Endpoint: endPoint,
+			Method:   "POST",
+			Port:     strconv.Itoa(int(eventSourcePort)),
+			URL:      s.webhookURL,
+		},
+		Events: webhookEvents,
+		AccessToken: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{
+				Name: accessTokenName,
+			},
+			Key: secretKeyAccessToken,
+		},
+		EnableSSLVerification: false,
+		GitlabBaseURL:         codeRepoProvider.Spec.ApiServer,
+		DeleteHookOnFinish:    true,
+		Projects:              []string{getIDFromCodeRepo(codeRepo.Name)},
+		SecretToken: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{
+				Name: secretTokenName,
+			},
+			Key: secretKeySecretToken,
+		},
+	}
+	return x
+}
+
+func getGitlabEventSourceBase() *eventsourcev1alpha1.EventSourceSpec {
 	eventSourceSpec := &eventsourcev1alpha1.EventSourceSpec{
 		Gitlab: map[string]eventsourcev1alpha1.GitlabEventSource{},
 		Template: &eventsourcev1alpha1.Template{
@@ -254,84 +379,7 @@ func (s *runtimeSyncer) calculateEventSourceGitlab(ctx context.Context, eventSou
 			},
 		},
 	}
-
-	for _, evsrc := range eventSources {
-		if evsrc.Gitlab == nil {
-			continue
-		}
-		codeRepo := &nautescrd.CodeRepo{}
-		if err := s.tenantK8sClient.Get(ctx, types.NamespacedName{
-			Namespace: s.productName,
-			Name:      evsrc.Gitlab.RepoName,
-		}, codeRepo); err != nil {
-			return nil, err
-		}
-
-		codeRepoProvider := &nautescrd.CodeRepoProvider{}
-		if err := s.tenantK8sClient.Get(ctx, types.NamespacedName{
-			Namespace: s.config.Nautes.Namespace,
-			Name:      codeRepo.Spec.CodeRepoProvider,
-		}, codeRepoProvider); err != nil {
-			return nil, err
-		}
-
-		vars := deepCopyStringMap(s.vars)
-		vars[keyRepoName] = evsrc.Gitlab.RepoName
-		vars[keyEventName] = evsrc.Name
-
-		eventName, err := getStringFromTemplate(tmplEventSourceGitlabEventName, vars)
-		if err != nil {
-			return nil, err
-		}
-		accessTokenName, err := getStringFromTemplate(tmplGitlabAccessToken, vars)
-		if err != nil {
-			return nil, err
-		}
-		secretTokenName, err := getStringFromTemplate(tmplGitlabSecretToken, vars)
-		if err != nil {
-			return nil, err
-		}
-		endPoint, err := getStringFromTemplate(tmplGitlabEndPoint, vars)
-		if err != nil {
-			return nil, err
-		}
-		webhookEvents, err := getArgoEventSourceEventsFromCodeRepo(codeRepo.Spec.Webhook.Events)
-		if err != nil {
-			return nil, err
-		}
-
-		eventSourceSpec.Gitlab[eventName] = eventsourcev1alpha1.GitlabEventSource{
-			Webhook: &eventsourcev1alpha1.WebhookContext{
-				Endpoint: endPoint,
-				Method:   "POST",
-				Port:     strconv.Itoa(int(eventSourcePort)),
-				URL:      s.webhookURL,
-			},
-			Events: webhookEvents,
-			AccessToken: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{
-					Name: accessTokenName,
-				},
-				Key: secretKeyAccessToken,
-			},
-			EnableSSLVerification: false,
-			GitlabBaseURL:         codeRepoProvider.Spec.ApiServer,
-			DeleteHookOnFinish:    true,
-			Projects:              []string{getIDFromCodeRepo(codeRepo.Name)},
-			SecretToken: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{
-					Name: secretTokenName,
-				},
-				Key: secretKeySecretToken,
-			},
-		}
-	}
-
-	if len(eventSourceSpec.Gitlab) == 0 {
-		return nil, nil
-	}
-
-	return eventSourceSpec, nil
+	return eventSourceSpec
 }
 
 func getArgoEventSourceEventsFromCodeRepo(events []string) ([]string, error) {
@@ -363,10 +411,21 @@ func getGitlabEventHeadersFromCodeRepo(events []string) ([]string, error) {
 
 const secretStoreName = "git-secret-store"
 
-func (s *runtimeSyncer) syncGitlabAccessToken(ctx context.Context, name, repoName string, owner client.Object) error {
+func (s *runtimeSyncer) syncGitlabAccessToken(ctx context.Context, repoInfo nautescrd.Gitlab, owner client.Object) error {
 	if err := s.syncSecretStore(ctx, secretStoreName); err != nil {
 		return fmt.Errorf("sync secret store %s failed: %w", secretStoreName, err)
 	}
+
+	repoName := repoInfo.RepoName
+
+	vars := deepCopyStringMap(s.vars)
+	vars[keyRepoName] = repoName
+
+	name, err := getStringFromTemplate(tmplGitlabAccessToken, vars)
+	if err != nil {
+		return err
+	}
+
 	esSpec, err := s.caculateExternalSecret(ctx, name, repoName)
 	if err != nil {
 		return err
@@ -615,17 +674,13 @@ func (s *runtimeSyncer) removeExternalSecretExpireOwnerReference(ctx context.Con
 		return fmt.Errorf("list external secret failed: %w", err)
 	}
 
-	inUsingExternalSecretNames := inUsingResourceNames{}
+	inUsingExternalSecretNames := map[string]bool{}
 	for _, name := range owner.Spec.Gitlab {
-		inUsingExternalSecretNames = append(inUsingExternalSecretNames, name.AccessToken.Name)
+		inUsingExternalSecretNames[name.AccessToken.Name] = true
 	}
 
 	for _, es := range externalSecrets.Items {
-		if utils.IsOwner(owner, &es, scheme) {
-			if inUsingExternalSecretNames.existed(es.Name) {
-				continue
-			}
-
+		if utils.IsOwner(owner, &es, scheme) && !inUsingExternalSecretNames[es.Name] {
 			if err := utils.RemoveOwner(owner, &es, scheme); err != nil {
 				return fmt.Errorf("remove external secret owner failed: %w", err)
 			}
@@ -706,47 +761,46 @@ func (s *runtimeSyncer) codeRepoIsUsed(ctx context.Context, name string, exclude
 	return isUsed, nil
 }
 
-func (s *runtimeSyncer) syncWebhookSecretToken(ctx context.Context, name string, owner client.Object) error {
-	secretToken := &corev1.Secret{}
-	key := types.NamespacedName{
-		Namespace: s.config.EventBus.ArgoEvents.Namespace,
-		Name:      name,
+func (s *runtimeSyncer) syncWebhookSecretToken(ctx context.Context, repoInfo nautescrd.Gitlab, owner client.Object) error {
+	vars := deepCopyStringMap(s.vars)
+	vars[keyRepoName] = repoInfo.RepoName
+
+	name, err := getStringFromTemplate(tmplGitlabSecretToken, vars)
+	if err != nil {
+		return err
 	}
-	if err := s.k8sClient.Get(ctx, key, secretToken); err != nil {
-		if apierrors.IsNotFound(err) {
-			token := uuid.New().String()
-			secretToken = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      key.Name,
-					Namespace: key.Namespace,
-					Labels:    s.resouceLabel,
-				},
-				Data: map[string][]byte{
-					"token": []byte(token),
-				},
-			}
-		} else {
-			return err
+
+	secretToken := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: s.config.EventBus.ArgoEvents.Namespace,
+			Labels:    s.resouceLabel,
+		},
+	}
+
+	operation, err := controllerutil.CreateOrUpdate(ctx, s.k8sClient, secretToken, func() error {
+		if err := utils.CheckResourceOperability(secretToken, s.productName); err != nil {
+			return fmt.Errorf("webhook secret is illegal: %w", err)
 		}
-	}
 
-	reason, ok := utils.IsLegal(secretToken, s.productName)
-	if !ok {
-		return fmt.Errorf("webhook secret is illegal: %s", reason)
-	}
-
-	if !nautesutil.IsOwner(owner, secretToken, scheme) {
 		if err := controllerutil.SetOwnerReference(owner, secretToken, scheme); err != nil {
 			return fmt.Errorf("set secret token %s's owner faield: %w", name, err)
 		}
 
-		if secretToken.CreationTimestamp.IsZero() {
-			return s.k8sClient.Create(ctx, secretToken)
+		if secretToken.Data == nil {
+			token := uuid.New().String()
+			secretToken.Data = map[string][]byte{
+				"token": []byte(token),
+			}
 		}
-		return s.k8sClient.Update(ctx, secretToken)
+		return nil
+	})
+
+	if operation != controllerutil.OperationResultNone {
+		log.FromContext(ctx).V(1).Info("resource modified", "name", name, "operation", operation)
 	}
 
-	return nil
+	return err
 }
 
 func (s *runtimeSyncer) deleteUnUsedSecretsToken(ctx context.Context, owner *eventsourcev1alpha1.EventSource) error {
@@ -759,22 +813,15 @@ func (s *runtimeSyncer) deleteUnUsedSecretsToken(ctx context.Context, owner *eve
 		return err
 	}
 
-	inUsedSecretNames := inUsingResourceNames{}
+	inUsedSecretNames := map[string]bool{}
 	for _, name := range owner.Spec.Gitlab {
-		inUsedSecretNames = append(inUsedSecretNames, name.SecretToken.Name)
+		inUsedSecretNames[name.SecretToken.Name] = true
 	}
 
 	for _, secret := range secretList.Items {
-		if utils.IsOwner(owner, &secret, scheme) {
-			unUsed := true
-			if inUsedSecretNames.existed(secret.Name) {
-				unUsed = false
-			}
-
-			if unUsed {
-				if err := s.k8sClient.Delete(ctx, &secret); err != nil {
-					return err
-				}
+		if utils.IsOwner(owner, &secret, scheme) && !inUsedSecretNames[secret.Name] {
+			if err := s.k8sClient.Delete(ctx, &secret); err != nil {
+				return err
 			}
 		}
 	}
@@ -1151,29 +1198,19 @@ func (s *runtimeSyncer) revokePermissionCodeRepo(ctx context.Context, codeRepo n
 	return s.secClient.RevokePermission(ctx, secret, vaultArgoEventRole, s.cluster.Name)
 }
 
-func (s *runtimeSyncer) grantPermissions(ctx context.Context) error {
-	codeRepoNames := inUsingResourceNames{}
-	for _, nautesEventSource := range s.runtime.Spec.EventSources {
-		if nautesEventSource.Gitlab != nil &&
-			!codeRepoNames.existed(nautesEventSource.Gitlab.RepoName) {
-			codeRepoNames = append(codeRepoNames, nautesEventSource.Gitlab.RepoName)
-		}
-	}
-
-	for _, name := range codeRepoNames {
-		codeRepo := &nautescrd.CodeRepo{}
-		key := types.NamespacedName{
+func (s *runtimeSyncer) grantPermissions(ctx context.Context, repoName string) error {
+	codeRepo := &nautescrd.CodeRepo{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      repoName,
 			Namespace: s.productName,
-			Name:      name,
-		}
-		if err := s.tenantK8sClient.Get(ctx, key, codeRepo); err != nil {
-			return err
-		}
-
-		if err := s.grantPermissionCodeRepo(ctx, *codeRepo); err != nil {
-			return fmt.Errorf("grant permission to code repo failed: %w", err)
-		}
+		},
+	}
+	if err := s.tenantK8sClient.Get(ctx, client.ObjectKeyFromObject(codeRepo), codeRepo); err != nil {
+		return err
 	}
 
+	if err := s.grantPermissionCodeRepo(ctx, *codeRepo); err != nil {
+		return fmt.Errorf("grant permission to code repo failed: %w", err)
+	}
 	return nil
 }
