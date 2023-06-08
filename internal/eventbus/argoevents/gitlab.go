@@ -133,6 +133,10 @@ func (s *runtimeSyncer) syncEventSourceGitlab(ctx context.Context) error {
 		return fmt.Errorf("can not get event source: %w", err)
 	}
 
+	if err := s.syncSecretStore(ctx, secretStoreName); err != nil {
+		return fmt.Errorf("sync secret store %s failed: %w", secretStoreName, err)
+	}
+
 	repoNames := getRepoNamesFromEventSource(runtime.Spec.EventSources)
 	waitGroup := &sync.WaitGroup{}
 	errChan := make(chan error, len(repoNames))
@@ -458,10 +462,6 @@ func getGitlabEventHeadersFromCodeRepo(events []string) ([]string, error) {
 const secretStoreName = "git-secret-store"
 
 func (s *runtimeSyncer) syncGitlabAccessToken(ctx context.Context, repoName string, owner client.Object) error {
-	if err := s.syncSecretStore(ctx, secretStoreName); err != nil {
-		return fmt.Errorf("sync secret store %s failed: %w", secretStoreName, err)
-	}
-
 	vars := deepCopyStringMap(s.vars)
 	vars[keyRepoName] = repoName
 
@@ -602,7 +602,7 @@ func (s *runtimeSyncer) syncExternalSecret(ctx context.Context, name, repoName s
 	}
 
 	if needUpdate {
-		s.updateExternalSecret(ctx, externalSecret)
+		return s.updateExternalSecret(ctx, externalSecret)
 	}
 
 	return nil
