@@ -60,6 +60,8 @@ type DeploymentRuntimeReconciler struct {
 	NautesConfig nautescfg.NautesConfigs
 }
 
+var reconcileFrequency = time.Second * 60
+
 //+kubebuilder:rbac:groups=nautes.resource.nautes.io,resources=deploymentruntimes,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=nautes.resource.nautes.io,resources=deploymentruntimes/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=nautes.resource.nautes.io,resources=deploymentruntimes/finalizers,verbs=update
@@ -109,7 +111,7 @@ func (r *DeploymentRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 		if runtime.Status.DeployHistory != nil {
 			if err := r.Syncer.Delete(ctx, runtime); err != nil {
-				setDeployRuntimeStatus(runtime, nil, err)
+				setDeployRuntimeStatus(runtime, nil, nil, err)
 				if err := r.Status().Update(ctx, runtime); err != nil {
 					logger.Error(err, "update status failed")
 				}
@@ -122,7 +124,7 @@ func (r *DeploymentRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			return ctrl.Result{}, err
 		}
 		logger.V(1).Info("delete finish")
-		return ctrl.Result{RequeueAfter: time.Second * 60}, err
+		return ctrl.Result{}, err
 	}
 
 	if !controllerutil.ContainsFinalizer(runtime, runtimeFinalizerName) {
@@ -134,20 +136,31 @@ func (r *DeploymentRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	illegalProjectRefs, err := runtime.Validate(ctx, &nautescrd.ValidateClientK8s{Client: r.Client})
 	if err != nil {
-		return ctrl.Result{}, err
+		setDeployRuntimeStatus(runtime, nil, nil, err)
+		if err := r.Status().Update(ctx, runtime); err != nil {
+			logger.Error(err, "update status failed")
+		}
+		return ctrl.Result{}, fmt.Errorf("validate runtime failed: %w", err)
+	}
+
+	if len(illegalProjectRefs) == len(runtime.Spec.ProjectsRef) {
+		setDeployRuntimeStatus(runtime, nil, illegalProjectRefs, fmt.Errorf("No valid project exists"))
+		if err := r.Status().Update(ctx, runtime); err != nil {
+			logger.Error(err, "update status failed")
+		}
+		return ctrl.Result{RequeueAfter: reconcileFrequency}, nil
 	}
 
 	legalRuntime := NewDeploymentRuntimeWithOutIllegalProject(*runtime, illegalProjectRefs)
 	deployInfo, err := r.Syncer.Sync(ctx, legalRuntime)
-	setDeployRuntimeStatus(runtime, deployInfo, err)
-	runtime.Status.IllegalProjectRefs = illegalProjectRefs
 
+	setDeployRuntimeStatus(runtime, deployInfo, illegalProjectRefs, err)
 	if err := r.Status().Update(ctx, runtime); err != nil {
 		return ctrl.Result{}, err
 	}
 	logger.V(1).Info("reconcile finish")
 
-	return ctrl.Result{RequeueAfter: time.Second * 60}, err
+	return ctrl.Result{RequeueAfter: reconcileFrequency}, err
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -196,6 +209,10 @@ func (r *DeploymentRuntimeReconciler) findDeploymentRuntimeForCoderepo(coderepo 
 	return requests
 }
 
+func (r *DeploymentRuntimeReconciler) updateStatus() error {
+	return nil
+}
+
 func NewDeploymentRuntimeWithOutIllegalProject(runtime nautescrd.DeploymentRuntime, illegalProjects []nautescrd.IllegalProjectRef) *nautescrd.DeploymentRuntime {
 	newRuntime := runtime.DeepCopy().DeepCopyObject().(*nautescrd.DeploymentRuntime)
 	// Set version to 0 to avoid syncer update resource by new runtime
@@ -221,7 +238,7 @@ func NewDeploymentRuntimeWithOutIllegalProject(runtime nautescrd.DeploymentRunti
 	return newRuntime
 }
 
-func setDeployRuntimeStatus(runtime *nautescrd.DeploymentRuntime, result *interfaces.RuntimeDeploymentResult, err error) {
+func setDeployRuntimeStatus(runtime *nautescrd.DeploymentRuntime, result *interfaces.RuntimeDeploymentResult, illegalProjectRefs []nautescrd.IllegalProjectRef, err error) {
 	if err != nil {
 		condition := metav1.Condition{
 			Type:    runtimeConditionType,
@@ -250,4 +267,9 @@ func setDeployRuntimeStatus(runtime *nautescrd.DeploymentRuntime, result *interf
 		}
 	}
 
+	if len(illegalProjectRefs) != 0 {
+		runtime.Status.IllegalProjectRefs = illegalProjectRefs
+	} else {
+		runtime.Status.IllegalProjectRefs = nil
+	}
 }

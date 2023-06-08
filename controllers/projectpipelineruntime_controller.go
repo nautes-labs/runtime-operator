@@ -17,7 +17,6 @@ package controllers
 import (
 	"context"
 	"fmt"
-	"time"
 
 	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
 	nautescfg "github.com/nautes-labs/pkg/pkg/nautesconfigs"
@@ -96,7 +95,7 @@ func (r *ProjectPipelineRuntimeReconciler) Reconcile(ctx context.Context, req ct
 			return ctrl.Result{}, err
 		}
 		logger.V(1).Info("delete finish")
-		return ctrl.Result{RequeueAfter: time.Second * 60}, err
+		return ctrl.Result{}, err
 	}
 
 	if !controllerutil.ContainsFinalizer(runtime, runtimeFinalizerName) {
@@ -106,15 +105,14 @@ func (r *ProjectPipelineRuntimeReconciler) Reconcile(ctx context.Context, req ct
 		}
 	}
 
-	illegalEventSources, err := runtime.Validate(ctx, &nautescrd.ValidateClientK8s{
-		Client: r.Client,
-	})
+	illegalEventSources, err := runtime.Validate(ctx, &nautescrd.ValidateClientK8s{Client: r.Client})
 	if err != nil {
 		setPipelineRuntimeStatus(runtime, nil, err)
 		if err := r.Status().Update(ctx, runtime); err != nil {
 			logger.Error(err, "update status failed")
 		}
-		return ctrl.Result{}, err
+
+		return ctrl.Result{}, fmt.Errorf("validate runtime failed: %w", err)
 	}
 
 	legalRuntime := NewPipelineRuntimeWithOutIllegalEventSource(*runtime, illegalEventSources)
@@ -127,7 +125,7 @@ func (r *ProjectPipelineRuntimeReconciler) Reconcile(ctx context.Context, req ct
 	}
 	logger.V(1).Info("reconcile finish")
 
-	return ctrl.Result{RequeueAfter: time.Second * 60}, err
+	return ctrl.Result{RequeueAfter: reconcileFrequency}, err
 }
 
 // SetupWithManager sets up the controller with the Manager.

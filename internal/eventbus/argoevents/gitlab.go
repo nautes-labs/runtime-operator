@@ -21,6 +21,8 @@ import (
 	"net/url"
 	"reflect"
 	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/argoproj/argo-events/pkg/apis/common"
 	eventsourcev1alpha1 "github.com/argoproj/argo-events/pkg/apis/eventsource/v1alpha1"
@@ -106,8 +108,9 @@ func (s *runtimeSyncer) syncEventSourceGitlab(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	runtime := s.runtime
 
-	spec, err := s.calculateEventSourceGitlab(ctx, s.runtime)
+	spec, err := s.calculateEventSourceGitlab(ctx, runtime)
 	if err != nil {
 		return fmt.Errorf("calculate event source %s failed: %w", eventSourceName, err)
 	}
@@ -130,26 +133,69 @@ func (s *runtimeSyncer) syncEventSourceGitlab(ctx context.Context) error {
 		return fmt.Errorf("can not get event source: %w", err)
 	}
 
-	for _, nautesEventSource := range s.runtime.Spec.EventSources {
-		if nautesEventSource.Gitlab == nil {
-			continue
-		}
+	repoNames := getRepoNamesFromEventSource(runtime.Spec.EventSources)
+	waitGroup := &sync.WaitGroup{}
+	errChan := make(chan error, len(repoNames))
+	for _, repoName := range repoNames {
+		waitGroup.Add(3)
 
-		if err = s.grantPermissions(ctx, nautesEventSource.Gitlab.RepoName); err != nil {
-			return fmt.Errorf("grant permissions failed: %w", err)
-		}
+		go func(repoName string) {
+			defer waitGroup.Done()
+			if err = s.grantPermissions(ctx, repoName); err != nil {
+				errChan <- fmt.Errorf("grant permissions failed: %w", err)
+			}
+		}(repoName)
 
-		if err := s.syncGitlabAccessToken(ctx, *nautesEventSource.Gitlab, argoEventSource); err != nil {
-			return fmt.Errorf("sync gitlab access token failed: %w", err)
-		}
+		go func(repoName string) {
+			defer waitGroup.Done()
+			if err := s.syncGitlabAccessToken(ctx, repoName, argoEventSource); err != nil {
+				errChan <- fmt.Errorf("sync gitlab access token failed: %w", err)
+			}
+		}(repoName)
 
-		if err := s.syncWebhookSecretToken(ctx, *nautesEventSource.Gitlab, argoEventSource); err != nil {
-			return fmt.Errorf("sync gitlab secret token failed: %w", err)
-		}
-
+		go func(repoName string) {
+			defer waitGroup.Done()
+			if err := s.syncWebhookSecretToken(ctx, repoName, argoEventSource); err != nil {
+				errChan <- fmt.Errorf("sync gitlab secret token failed: %w", err)
+			}
+		}(repoName)
+	}
+	waitGroup.Wait()
+	close(errChan)
+	if err := getErrFromErrorChan(errChan); err != nil {
+		return fmt.Errorf("Failed to create sub resource for eventsource: %w", err)
 	}
 
 	return s.syncEventSourceGitlabRelatedResources(ctx, argoEventSource)
+}
+
+func getErrFromErrorChan(errs chan error) error {
+	errNum := len(errs)
+	if errNum == 0 {
+		return nil
+	}
+	errMsgs := make([]string, errNum)
+	for err := range errs {
+		errMsgs = append(errMsgs, err.Error())
+	}
+	return fmt.Errorf("[%s]", strings.Join(errMsgs, "|"))
+}
+
+func getRepoNamesFromEventSource(eventSources []nautescrd.EventSource) []string {
+	mapRepoNames := map[string]bool{}
+	for _, eventSource := range eventSources {
+		if eventSource.Gitlab == nil {
+			continue
+		}
+		mapRepoNames[eventSource.Gitlab.RepoName] = true
+	}
+
+	repoNames := []string{}
+	for name := range mapRepoNames {
+		repoNames = append(repoNames, name)
+	}
+
+	return repoNames
 }
 
 func (s *runtimeSyncer) syncEventSourceGitlabRelatedResources(ctx context.Context, eventSource *eventsourcev1alpha1.EventSource) error {
@@ -411,12 +457,10 @@ func getGitlabEventHeadersFromCodeRepo(events []string) ([]string, error) {
 
 const secretStoreName = "git-secret-store"
 
-func (s *runtimeSyncer) syncGitlabAccessToken(ctx context.Context, repoInfo nautescrd.Gitlab, owner client.Object) error {
+func (s *runtimeSyncer) syncGitlabAccessToken(ctx context.Context, repoName string, owner client.Object) error {
 	if err := s.syncSecretStore(ctx, secretStoreName); err != nil {
 		return fmt.Errorf("sync secret store %s failed: %w", secretStoreName, err)
 	}
-
-	repoName := repoInfo.RepoName
 
 	vars := deepCopyStringMap(s.vars)
 	vars[keyRepoName] = repoName
@@ -761,9 +805,9 @@ func (s *runtimeSyncer) codeRepoIsUsed(ctx context.Context, name string, exclude
 	return isUsed, nil
 }
 
-func (s *runtimeSyncer) syncWebhookSecretToken(ctx context.Context, repoInfo nautescrd.Gitlab, owner client.Object) error {
+func (s *runtimeSyncer) syncWebhookSecretToken(ctx context.Context, repoName string, owner client.Object) error {
 	vars := deepCopyStringMap(s.vars)
-	vars[keyRepoName] = repoInfo.RepoName
+	vars[keyRepoName] = repoName
 
 	name, err := getStringFromTemplate(tmplGitlabSecretToken, vars)
 	if err != nil {
