@@ -48,7 +48,7 @@ type Syncer struct {
 }
 
 // Sync will build up runtime in destination
-func (s *Syncer) Sync(ctx context.Context, runtime interfaces.Runtime) (*interfaces.DeployInfo, error) {
+func (s *Syncer) Sync(ctx context.Context, runtime interfaces.Runtime) (*interfaces.RuntimeDeploymentResult, error) {
 	cfg, ok := runtimecontext.FromNautesConfigContext(ctx)
 	if !ok {
 		return nil, fmt.Errorf("get nautes config from context failed")
@@ -67,6 +67,11 @@ func (s *Syncer) Sync(ctx context.Context, runtime interfaces.Runtime) (*interfa
 				Namespace: cluster.Namespace,
 			},
 		}
+	}
+
+	result := &interfaces.RuntimeDeploymentResult{
+		Cluster: cluster.Name,
+		App:     interfaces.SelectedApp{},
 	}
 
 	envManager, ok := EnvManagers[cluster.Spec.ClusterKind]
@@ -93,7 +98,6 @@ func (s *Syncer) Sync(ctx context.Context, runtime interfaces.Runtime) (*interfa
 		return nil, fmt.Errorf("init env failed: %w", err)
 	}
 
-	var deployInfo *interfaces.DeployInfo
 	switch deployTask.RuntimeType {
 	case interfaces.RUNTIME_TYPE_DEPLOYMENT:
 		deployApp, err := getDeployApp(ctx, string(cluster.Spec.ClusterKind), cfg)
@@ -101,25 +105,29 @@ func (s *Syncer) Sync(ctx context.Context, runtime interfaces.Runtime) (*interfa
 			return nil, err
 		}
 
-		deployInfo, err = deployApp.Deploy(ctx, *deployTask)
+		AppDeployInfo, err := deployApp.Deploy(ctx, *deployTask)
 		if err != nil {
 			return nil, fmt.Errorf("deploy app failed: %w", err)
 		}
+		result.DeploymentDeploymentResult = AppDeployInfo
+
 	case interfaces.RUNTIME_TYPE_PIPELINE:
 		eventBusApp, err := getEventBusApp(ctx, string(cluster.Spec.ClusterKind), cfg)
 		if err != nil {
 			return nil, err
 		}
-		deployInfo, err = eventBusApp.SyncEvents(ctx, *deployTask)
+
+		_, err = eventBusApp.SyncEvents(ctx, *deployTask)
 		if err != nil {
 			return nil, fmt.Errorf("sync event failed: %w", err)
 		}
+
 		pipelineApp, err := getPipelineApp(ctx, string(cluster.Spec.ClusterKind), cfg)
 		if err := pipelineApp.DeployPipelineRuntime(ctx, *deployTask); err != nil {
 			return nil, fmt.Errorf("sync pipeline runtime failed: %w", err)
 		}
 	}
-	return deployInfo, nil
+	return result, nil
 }
 
 // Delete will clean up runtime in destination

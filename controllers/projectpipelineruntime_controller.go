@@ -17,7 +17,6 @@ package controllers
 import (
 	"context"
 	"fmt"
-	"time"
 
 	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
 	nautescfg "github.com/nautes-labs/pkg/pkg/nautesconfigs"
@@ -96,26 +95,27 @@ func (r *ProjectPipelineRuntimeReconciler) Reconcile(ctx context.Context, req ct
 			return ctrl.Result{}, err
 		}
 		logger.V(1).Info("delete finish")
-		return ctrl.Result{RequeueAfter: time.Second * 60}, err
-	}
-
-	controllerutil.AddFinalizer(runtime, runtimeFinalizerName)
-	if err := r.Update(ctx, runtime); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	illegalEventSources, err := runtime.Validate(&nautescrd.PipelineRunetimeValidateClientK8s{
-		Client: r.Client,
-	})
+	if !controllerutil.ContainsFinalizer(runtime, runtimeFinalizerName) {
+		controllerutil.AddFinalizer(runtime, runtimeFinalizerName)
+		if err := r.Update(ctx, runtime); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	illegalEventSources, err := runtime.Validate(ctx, &nautescrd.ValidateClientK8s{Client: r.Client})
 	if err != nil {
 		setPipelineRuntimeStatus(runtime, nil, err)
 		if err := r.Status().Update(ctx, runtime); err != nil {
 			logger.Error(err, "update status failed")
 		}
-		return ctrl.Result{}, err
+
+		return ctrl.Result{}, fmt.Errorf("validate runtime failed: %w", err)
 	}
 
-	legalRuntime := removeIllegalEventSourceFromRuntime(*runtime, illegalEventSources)
+	legalRuntime := NewPipelineRuntimeWithOutIllegalEventSource(*runtime, illegalEventSources)
 	deployInfo, err := r.Syncer.Sync(ctx, legalRuntime)
 
 	setPipelineRuntimeStatus(runtime, deployInfo, err)
@@ -125,7 +125,7 @@ func (r *ProjectPipelineRuntimeReconciler) Reconcile(ctx context.Context, req ct
 	}
 	logger.V(1).Info("reconcile finish")
 
-	return ctrl.Result{RequeueAfter: time.Second * 60}, err
+	return ctrl.Result{RequeueAfter: reconcileFrequency}, err
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -136,8 +136,14 @@ func (r *ProjectPipelineRuntimeReconciler) SetupWithManager(mgr ctrl.Manager) er
 		Complete(r)
 }
 
-func removeIllegalEventSourceFromRuntime(runtime nautescrd.ProjectPipelineRuntime, illegalEventSources []nautescrd.IllegalEventSource) *nautescrd.ProjectPipelineRuntime {
+func NewPipelineRuntimeWithOutIllegalEventSource(runtime nautescrd.ProjectPipelineRuntime, illegalEventSources []nautescrd.IllegalEventSource) *nautescrd.ProjectPipelineRuntime {
 	newRuntime := runtime.DeepCopy().DeepCopyObject().(*nautescrd.ProjectPipelineRuntime)
+	// Set version to 0 to avoid syncer update resource by new runtime
+	newRuntime.ResourceVersion = "0"
+
+	if len(illegalEventSources) == 0 {
+		return newRuntime
+	}
 
 	indexIllegalEventSource := map[string]bool{}
 	for _, illegalEv := range illegalEventSources {
@@ -160,12 +166,10 @@ func removeIllegalEventSourceFromRuntime(runtime nautescrd.ProjectPipelineRuntim
 	}
 	newRuntime.Spec.PipelineTriggers = legalTriggers
 
-	// Set version to 0 to avoid syncer update resource by new runtime
-	newRuntime.ResourceVersion = "0"
 	return newRuntime
 }
 
-func setPipelineRuntimeStatus(runtime *nautescrd.ProjectPipelineRuntime, result *interfaces.DeployInfo, err error) {
+func setPipelineRuntimeStatus(runtime *nautescrd.ProjectPipelineRuntime, result *interfaces.RuntimeDeploymentResult, err error) {
 	if err != nil {
 		condition := metav1.Condition{
 			Type:    runtimeConditionType,
@@ -181,5 +185,9 @@ func setPipelineRuntimeStatus(runtime *nautescrd.ProjectPipelineRuntime, result 
 			Reason: runtimeConditionReason,
 		}
 		runtime.Status.Conditions = nautescrd.GetNewConditions(runtime.Status.Conditions, []metav1.Condition{condition}, map[string]bool{runtimeConditionType: true})
+	}
+
+	if result != nil {
+		runtime.Status.Cluster = result.Cluster
 	}
 }

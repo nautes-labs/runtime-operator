@@ -34,7 +34,7 @@ func NewSyncer(client client.Client) interfaces.EventBus {
 
 // SyncEvents used to make sure event bus is the same as project runtime define in dest cluster.
 // It will create argo eventsource and sensor.
-func (s Syncer) SyncEvents(ctx context.Context, task interfaces.RuntimeSyncTask) (*interfaces.DeployInfo, error) {
+func (s Syncer) SyncEvents(ctx context.Context, task interfaces.RuntimeSyncTask) (*interfaces.EventBusDeploymentResult, error) {
 	taskSyncer, err := newRuntimeSyncer(ctx, task, s.k8sClient)
 	if err != nil {
 		return nil, fmt.Errorf("create runtime syncer failed: %w", err)

@@ -49,7 +49,7 @@ var (
 	kubernetesDefaultService = "https://kubernetes.default.svc"
 )
 
-func (d Syncer) Deploy(ctx context.Context, task interfaces.RuntimeSyncTask) (*interfaces.DeployInfo, error) {
+func (d Syncer) Deploy(ctx context.Context, task interfaces.RuntimeSyncTask) (*interfaces.DeploymentDeploymentResult, error) {
 	history, repoName, destCluster, appProject, app, appSource, policyManager, err := d.initNames(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("init var faled: %w", err)
@@ -88,7 +88,7 @@ func (d Syncer) Deploy(ctx context.Context, task interfaces.RuntimeSyncTask) (*i
 		return nil, fmt.Errorf("update rbac policy to cluster failed: %w", err)
 	}
 
-	return &interfaces.DeployInfo{Source: repoURL}, nil
+	return &interfaces.DeploymentDeploymentResult{Source: repoURL}, nil
 }
 
 func (d Syncer) UnDeploy(ctx context.Context, task interfaces.RuntimeSyncTask) error {
