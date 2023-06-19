@@ -263,6 +263,12 @@ var _ = Describe("EnvManager", func() {
 				Server:    "https://kubernetes.default.svc",
 				Namespace: productName,
 			},
+			SyncPolicy: &argocdv1alpha1.SyncPolicy{
+				Automated: &argocdv1alpha1.SyncPolicyAutomated{
+					Prune:    true,
+					SelfHeal: true,
+				},
+			},
 			Project: productName,
 		}
 		Expect(reflect.DeepEqual(app.Spec, targetAppSpec)).Should(BeTrue())
@@ -312,6 +318,12 @@ var _ = Describe("EnvManager", func() {
 			Destination: argocdv1alpha1.ApplicationDestination{
 				Server:    "https://kubernetes.default.svc",
 				Namespace: productName,
+			},
+			SyncPolicy: &argocdv1alpha1.SyncPolicy{
+				Automated: &argocdv1alpha1.SyncPolicyAutomated{
+					Prune:    true,
+					SelfHeal: true,
+				},
 			},
 			Project: productName,
 		}
@@ -366,6 +378,12 @@ var _ = Describe("EnvManager", func() {
 			Destination: argocdv1alpha1.ApplicationDestination{
 				Server:    "https://kubernetes.default.svc",
 				Namespace: productName,
+			},
+			SyncPolicy: &argocdv1alpha1.SyncPolicy{
+				Automated: &argocdv1alpha1.SyncPolicyAutomated{
+					Prune:    true,
+					SelfHeal: true,
+				},
 			},
 			Project: productName,
 		}

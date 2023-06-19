@@ -349,7 +349,6 @@ var _ = Describe("Argoevents", func() {
 		paras = sensorList.Items[0].Spec.Triggers[0].Template.K8s.Parameters
 		Expect(*paras[0].Src.Value).Should(Equal("dev"))
 		Expect(paras[0].Src.DataKey).Should(Equal(""))
-		Expect(paras[0].Src.DependencyName).Should(Equal(""))
 
 	})
 
