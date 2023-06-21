@@ -1186,12 +1186,14 @@ func caculateParameterGitlab(ctx context.Context, runtimeTrigger nautescrd.Pipel
 	paras := []sensorv1alpha1.TriggerParameter{}
 	pipelineBranch := sensorv1alpha1.TriggerParameter{
 		Dest: "spec.params.0.value",
-		Src:  &sensorv1alpha1.TriggerParameterSource{},
+		Src: &sensorv1alpha1.TriggerParameterSource{
+			DependencyName: dependencyName,
+		},
 	}
+
 	if runtimeTrigger.Revision != "" {
 		pipelineBranch.Src.Value = &runtimeTrigger.Revision
 	} else {
-		pipelineBranch.Src.DependencyName = dependencyName
 		pipelineBranch.Src.DataKey = "body.ref"
 	}
 	paras = append(paras, pipelineBranch)

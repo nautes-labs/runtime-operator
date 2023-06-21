@@ -1,8 +1,8 @@
 # Runtime Operator
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![golang](https://img.shields.io/badge/golang-v1.17.13-brightgreen)](https://go.dev/doc/install)
-[![version](https://img.shields.io/badge/version-v0.3.1-green)]()
+[![golang](https://img.shields.io/badge/golang-v1.20.5-brightgreen)](https://go.dev/doc/install)
+[![version](https://img.shields.io/badge/version-v0.3.2-green)]()
 
 Runtime Operator 项目提供了一组用于调谐 Project Pipeline Runtime 资源和 Deployment Runtime 资源事件的 Controller，调谐内容主要是根据两类运行时资源的声明信息，在目标集群上同步流水线执行或应用部署所需的基础环境。
 
@@ -44,7 +44,7 @@ Controller 会根据 Deployment Runtime 资源引用的 Environment 资源找到
 ### 构建
 
 ```shell
-go mod tidy -go=1.16 && go mod tidy -go=1.17
+go mod tidy
 go build -o manager main.go
 ```
 
@@ -54,14 +54,6 @@ go build -o manager main.go
 ```
 
 ### 单元测试
-
-安装 Envtest
-
-```shell
-go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
-setup-envtest use 1.21.x
-export KUBEBUILDER_ASSETS=$HOME/.local/share/kubebuilder-envtest/k8s/1.21.4-linux-amd64
-```
 
 安装 Vault
 

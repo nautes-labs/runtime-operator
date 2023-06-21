@@ -271,6 +271,12 @@ func (c *productPipelineSyncerArgoCD) syncApp(ctx context.Context) error {
 		Path:           productPipelinePath,
 		TargetRevision: productTargetRevision,
 	}
+	app.Spec.SyncPolicy = &argocrd.SyncPolicy{
+		Automated: &argocrd.SyncPolicyAutomated{
+			Prune:    true,
+			SelfHeal: true,
+		},
+	}
 
 	if !reflect.DeepEqual(existing.Spec, app.Spec) {
 		return CreateOrUpdateResource(ctx, c.k8sClient, app)

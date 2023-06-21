@@ -143,7 +143,7 @@ func (r *DeploymentRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, fmt.Errorf("validate runtime failed: %w", err)
 	}
 
-	if len(illegalProjectRefs) == len(runtime.Spec.ProjectsRef) {
+	if len(illegalProjectRefs) != 0 && len(illegalProjectRefs) == len(runtime.Spec.ProjectsRef) {
 		setDeployRuntimeStatus(runtime, nil, illegalProjectRefs, fmt.Errorf("No valid project exists"))
 		if err := r.Status().Update(ctx, runtime); err != nil {
 			logger.Error(err, "update status failed")
