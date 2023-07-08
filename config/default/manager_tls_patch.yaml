@@ -15,11 +15,11 @@ spec:
             readOnly: true
           - name: client
             mountPath: "/ca/client.crt"
-            subPath: tls.crt
+            subPath: client.crt
             readOnly: true
           - name: client
             mountPath: "/ca/client.key"
-            subPath: tls.key
+            subPath: client.key
             readOnly: true
       volumes:
         - name: ca
