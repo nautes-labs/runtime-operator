@@ -134,7 +134,7 @@ func (r *DeploymentRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 
-	illegalProjectRefs, err := runtime.Validate(ctx, &nautescrd.ValidateClientK8s{Client: r.Client})
+	illegalProjectRefs, err := runtime.Validate(ctx, nautescrd.NewValidateClientFromK8s(r.Client))
 	if err != nil {
 		setDeployRuntimeStatus(runtime, nil, nil, err)
 		if err := r.Status().Update(ctx, runtime); err != nil {

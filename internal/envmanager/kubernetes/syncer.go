@@ -115,7 +115,7 @@ func (m Syncer) Remove(ctx context.Context, task interfaces.RuntimeSyncTask) err
 		return fmt.Errorf("check product namespace is using failed: %w", err)
 	}
 	if deletable {
-		logger.V(1).Info("threre are no namespace under product namespace , it will be delete", "NamespaceName", task.Product.Name)
+		logger.V(1).Info("runtime under product namespace is zero, it will be delete", "NamespaceName", task.Product.Name)
 
 		productCodeRepo, err := getProductCodeRepo(ctx, m.Client, task.Product.Name, task.NautesCfg.Nautes.Namespace)
 		if err != nil {

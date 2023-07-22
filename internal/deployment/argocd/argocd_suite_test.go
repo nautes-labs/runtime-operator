@@ -188,25 +188,51 @@ type mockClient struct {
 	provider    *nautescrd.CodeRepoProvider
 	product     *nautescrd.Product
 	codeRepo    *nautescrd.CodeRepo
+	environment []nautescrd.Environment
+	cluster     []nautescrd.Cluster
 	deployments []nautescrd.DeploymentRuntime
 }
 
 func (c *mockClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	discovered := false
 	switch obj.(type) {
 	case *nautescrd.CodeRepo:
 		obj.(*nautescrd.CodeRepo).ObjectMeta = c.codeRepo.ObjectMeta
 		obj.(*nautescrd.CodeRepo).Spec = c.codeRepo.Spec
-		return nil
+		discovered = true
 	case *nautescrd.CodeRepoProvider:
 		obj.(*nautescrd.CodeRepoProvider).ObjectMeta = c.provider.ObjectMeta
 		obj.(*nautescrd.CodeRepoProvider).Spec = c.provider.Spec
-		return nil
+		discovered = true
 	case *nautescrd.Product:
 		obj.(*nautescrd.Product).ObjectMeta = c.product.ObjectMeta
 		obj.(*nautescrd.Product).Spec = c.product.Spec
+		discovered = true
+	case *nautescrd.Environment:
+		for _, env := range c.environment {
+			if env.Name == key.Name && env.Namespace == key.Namespace {
+				obj.(*nautescrd.Environment).ObjectMeta = env.ObjectMeta
+				obj.(*nautescrd.Environment).Spec = env.Spec
+				discovered = true
+			}
+		}
+	case *nautescrd.Cluster:
+		for _, cluster := range c.cluster {
+			if cluster.Name == key.Name && cluster.Namespace == key.Namespace {
+				obj.(*nautescrd.Cluster).ObjectMeta = cluster.ObjectMeta
+				obj.(*nautescrd.Cluster).Spec = cluster.Spec
+				obj.(*nautescrd.Cluster).Status = cluster.Status
+				discovered = true
+			}
+		}
+	default:
+		return fmt.Errorf("unknow obj type")
+	}
+
+	if discovered {
 		return nil
 	}
-	return fmt.Errorf("unknow obj type")
+	return fmt.Errorf("resource %s/%s not found", key.Namespace, key.Name)
 }
 
 func (c *mockClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
@@ -250,44 +276,6 @@ func (c *mockClient) RESTMapper() meta.RESTMapper {
 	return nil
 }
 
-// SubResourceClientConstructor returns a subresource client for the named subResource. Known
-// upstream subResources usages are:
-//
-//   - ServiceAccount token creation:
-//     sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: "foo", Name: "bar"}}
-//     token := &authenticationv1.TokenRequest{}
-//     c.SubResourceClient("token").Create(ctx, sa, token)
-//
-//   - Pod eviction creation:
-//     pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "foo", Name: "bar"}}
-//     c.SubResourceClient("eviction").Create(ctx, pod, &policyv1.Eviction{})
-//
-//   - Pod binding creation:
-//     pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "foo", Name: "bar"}}
-//     binding := &corev1.Binding{Target: corev1.ObjectReference{Name: "my-node"}}
-//     c.SubResourceClient("binding").Create(ctx, pod, binding)
-//
-//   - CertificateSigningRequest approval:
-//     csr := &certificatesv1.CertificateSigningRequest{
-//     ObjectMeta: metav1.ObjectMeta{Namespace: "foo", Name: "bar"},
-//     Status: certificatesv1.CertificateSigningRequestStatus{
-//     Conditions: []certificatesv1.[]CertificateSigningRequestCondition{{
-//     Type: certificatesv1.CertificateApproved,
-//     Status: corev1.ConditionTrue,
-//     }},
-//     },
-//     }
-//     c.SubResourceClient("approval").Update(ctx, csr)
-//
-//   - Scale retrieval:
-//     dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "foo", Name: "bar"}}
-//     scale := &autoscalingv1.Scale{}
-//     c.SubResourceClient("scale").Get(ctx, dep, scale)
-//
-//   - Scale update:
-//     dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "foo", Name: "bar"}}
-//     scale := &autoscalingv1.Scale{Spec: autoscalingv1.ScaleSpec{Replicas: 2}}
-//     c.SubResourceClient("scale").Update(ctx, dep, client.WithSubResourceBody(scale))
 func (c *mockClient) SubResource(subResource string) client.SubResourceClient {
 	panic("not implemented") // TODO: Implement
 }

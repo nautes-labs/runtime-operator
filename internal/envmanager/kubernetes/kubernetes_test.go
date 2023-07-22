@@ -91,7 +91,10 @@ var _ = Describe("EnvManager", func() {
 			Spec: nautescrd.DeploymentRuntimeSpec{
 				Product:        productName,
 				ManifestSource: nautescrd.ManifestSource{},
-				Destination:    "",
+				Destination: nautescrd.DeploymentRuntimesDestination{
+					Environment: "",
+					Namespaces:  []string{},
+				},
 			},
 		}
 

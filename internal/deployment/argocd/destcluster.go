@@ -170,6 +170,11 @@ func (p *appProject) SyncAppPermission(ctx context.Context, newURL, oldURL, newN
 	return p.syncToKubernetes(ctx)
 }
 
+func (p *appProject) SyncAppProject(ctx context.Context, spec argocrd.AppProjectSpec) error {
+	p.resource.Spec = spec
+	return p.syncToKubernetes(ctx)
+}
+
 func (p *appProject) syncToKubernetes(ctx context.Context) error {
 	if p.resource.CreationTimestamp.IsZero() {
 		return p.Create(ctx, p.resource)
@@ -218,7 +223,7 @@ func (p *appProject) deleteNamespace(namespace string) {
 }
 
 func (p *appProject) isDeletable() bool {
-	return len(p.resource.Spec.SourceRepos) == 0 && len(p.resource.Spec.Destinations) == 0
+	return len(p.resource.Spec.SourceRepos) == 0
 }
 
 func (p *appProject) urlIsDeletable(ctx context.Context, repoURL string) (bool, error) {
