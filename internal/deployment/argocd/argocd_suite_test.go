@@ -240,8 +240,11 @@ func (c *mockClient) List(ctx context.Context, list client.ObjectList, opts ...c
 	case *nautescrd.DeploymentRuntimeList:
 		list.(*nautescrd.DeploymentRuntimeList).Items = c.deployments
 		return nil
+	case *nautescrd.ProjectPipelineRuntimeList:
+		return nil
 	}
 	return fmt.Errorf("unknow list type")
+
 }
 
 func (c *mockClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {

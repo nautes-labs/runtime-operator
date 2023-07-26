@@ -45,22 +45,33 @@ func getEnvClusterMapping(ctx context.Context, k8sClient client.Client, runtimes
 }
 
 func getRuntimesInProduct(ctx context.Context, k8sClient client.Client, product string) ([]interfaces.Runtime, error) {
-	runtimeList := &nautescrd.DeploymentRuntimeList{}
+	deploymentRuntimeList := &nautescrd.DeploymentRuntimeList{}
 	listOpt := client.InNamespace(product)
-	if err := k8sClient.List(ctx, runtimeList, &listOpt); err != nil {
+	if err := k8sClient.List(ctx, deploymentRuntimeList, &listOpt); err != nil {
+		return nil, err
+	}
+
+	pipelineRuntimeList := &nautescrd.ProjectPipelineRuntimeList{}
+	if err := k8sClient.List(ctx, pipelineRuntimeList, &listOpt); err != nil {
 		return nil, err
 	}
 
 	runtimes := []interfaces.Runtime{}
-	for _, runtime := range runtimeList.Items {
+	for _, runtime := range deploymentRuntimeList.Items {
 		if !runtime.DeletionTimestamp.IsZero() {
 			continue
 		}
-		runtimes = append(runtimes, &runtime)
+		runtimes = append(runtimes, runtime.DeepCopy())
+	}
+
+	for _, runtime := range pipelineRuntimeList.Items {
+		if !runtime.DeletionTimestamp.IsZero() {
+			continue
+		}
+		runtimes = append(runtimes, runtime.DeepCopy())
 	}
 
 	return runtimes, nil
-
 }
 
 func GetProductNamespacesInCluster(ctx context.Context, k8sClient client.Client, product, cluster string) ([]string, error) {
@@ -86,8 +97,6 @@ func GetProductNamespacesInCluster(ctx context.Context, k8sClient client.Client,
 		for _, namespace := range runtime.GetNamespaces() {
 			namespacesMap[namespace] = true
 		}
-
-		namespacesMap[runtime.GetName()] = true
 	}
 
 	namespaces := []string{}

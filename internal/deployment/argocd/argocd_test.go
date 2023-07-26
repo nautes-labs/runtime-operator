@@ -168,7 +168,7 @@ var _ = Describe("Deploy app argocd", func() {
 				},
 				Destination: nautescrd.DeploymentRuntimesDestination{
 					Environment: environmentName,
-					Namespaces:  []string{},
+					Namespaces:  []string{runtimeName},
 				},
 			},
 		}
@@ -390,7 +390,7 @@ var _ = Describe("Deploy app argocd", func() {
 		Expect(len(project.Spec.SourceRepos)).Should(Equal(1))
 		Expect(project.Spec.SourceRepos[0]).Should(Equal(targetURL))
 		Expect(len(project.Spec.Destinations)).Should(Equal(1))
-		Expect(project.Spec.Destinations[0].Namespace).Should(Equal(runtime2.Name))
+		Expect(project.Spec.Destinations[0].Namespace).Should(Equal(runtimeName))
 
 		mockcli.deployments = []nautescrd.DeploymentRuntime{}
 		task.Runtime = runtime2

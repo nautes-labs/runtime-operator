@@ -56,7 +56,6 @@ func (d Syncer) Deploy(ctx context.Context, task interfaces.RuntimeSyncTask) (*i
 		return nil, fmt.Errorf("init var faled: %w", err)
 	}
 
-	deployNamespace := task.Runtime.GetName()
 	repoURL, err := d.syncCodeRepo(ctx, task.Product.Name, repoName, *destCluster)
 	if err != nil {
 		return nil, fmt.Errorf("sync code repo failed: %w", err)
@@ -65,7 +64,6 @@ func (d Syncer) Deploy(ctx context.Context, task interfaces.RuntimeSyncTask) (*i
 	appSource.RepoURL = repoURL
 	err = app.SyncApp(ctx, func(spec *argocrd.ApplicationSpec) {
 		spec.Source = *appSource
-		spec.Destination.Namespace = deployNamespace
 		spec.Project = appProject.GetName()
 	})
 	if err != nil {
