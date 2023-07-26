@@ -64,10 +64,10 @@ func (s *Vault) CreateRole(ctx context.Context, clusterName string, role runtime
 	req := &vaultproxy.AuthroleRequest{
 		ClusterName: clusterName,
 		DestUser:    role.Name,
-		Role: &vaultproxy.AuthroleRequest_K8S{
-			K8S: &vaultproxy.KubernetesAuthRoleMeta{
-				Namespaces:      role.Groups[0],
-				ServiceAccounts: role.Users[0],
+		Role: &vaultproxy.AuthroleRequest_Kubernetes{
+			Kubernetes: &vaultproxy.KubernetesAuthRoleMeta{
+				Namespaces:      role.Groups,
+				ServiceAccounts: role.Users,
 			},
 		},
 	}

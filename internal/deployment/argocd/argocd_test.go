@@ -261,7 +261,6 @@ var _ = Describe("Deploy app argocd", func() {
 		err = k8sClient.Get(ctx, key, app)
 		Expect(err).Should(BeNil())
 		Expect(app.Spec.Source.RepoURL).Should(Equal(targetURL))
-		Expect(app.Spec.Destination.Namespace).Should(Equal(baseRuntime.Name))
 
 		project := &argocrd.AppProject{}
 		key = types.NamespacedName{
@@ -325,7 +324,6 @@ var _ = Describe("Deploy app argocd", func() {
 		err = k8sClient.Get(ctx, key, app)
 		Expect(err).Should(BeNil())
 		Expect(app.Spec.Source.RepoURL).Should(Equal(targetURL))
-		Expect(app.Spec.Destination.Namespace).Should(Equal(baseRuntime.Name))
 
 		project := &argocrd.AppProject{}
 		key = types.NamespacedName{

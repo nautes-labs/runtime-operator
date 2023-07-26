@@ -133,7 +133,7 @@ message GitMeta {
 message GitRequest {
     GitMeta meta = 1    [(validate.rules).message.required = true];
     // The key vaules will store in vault
-    GitKVs kvs = 2;
+    GitKVs kvs = 2      [(validate.rules).message.required = true];
 }
 
 message CreateGitReply {
@@ -177,7 +177,7 @@ message RepoMeta {
 
 message RepoRequest {
     RepoMeta meta = 1       [(validate.rules).message.required = true];
-    RepoAccount account = 2;
+    RepoAccount account = 2 [(validate.rules).message.required = true];
 }
 
 message CreateRepoReply {
@@ -197,7 +197,7 @@ message TenantGitMeta {
 message TenantGitRequest {
     TenantGitMeta meta = 1  [(validate.rules).message.required = true];
     // The access info of root user in gitlab or github
-    GitKVs kvs = 2;
+    GitKVs kvs = 2          [(validate.rules).message.required = true];
 }
 
 message CreateTenantGitReply {
@@ -217,7 +217,7 @@ message TenantRepoMeta {
 
 message TenantRepoRequest {
     TenantRepoMeta meta = 1 [(validate.rules).message.required = true];
-    RepoAccount account = 2;
+    RepoAccount account = 2 [(validate.rules).message.required = true];
 }
 
 message CreateTenantRepoReply {
@@ -245,7 +245,7 @@ message ClusterMeta {
 message ClusterRequest {
     ClusterMeta meta = 1        [(validate.rules).message.required = true];
     // Cluster access info, such as kubeconfig when clsuter type is kubernetes
-    ClusterAccount account = 2;
+    ClusterAccount account = 2  [(validate.rules).message.required = true];
 }
 
 message CreateClusterReply {
@@ -308,8 +308,8 @@ message DeleteAuthReply {
 }
 
 message KubernetesAuthRoleMeta{
-    string namespaces = 1           [(validate.rules).string.min_len = 1];
-    string service_accounts = 2     [json_name = "service_accounts", (validate.rules).string.min_len = 1];
+    repeated string namespaces = 1           [(validate.rules).repeated.items.string.min_len = 1];
+    repeated string service_accounts = 2     [json_name = "service_accounts", (validate.rules).repeated.items.string.min_len = 1];
 }
 
 message AuthroleRequest {
@@ -318,7 +318,7 @@ message AuthroleRequest {
     // Vault role name in kubernetes auth
     string dest_user = 2            [json_name = "dest_user", (validate.rules).string.min_len = 1];
     oneof role {
-        KubernetesAuthRoleMeta k8s = 3;
+        KubernetesAuthRoleMeta kubernetes = 3;
     }
 }
 message CreateAuthroleReply {

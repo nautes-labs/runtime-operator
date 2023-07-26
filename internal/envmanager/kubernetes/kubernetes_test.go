@@ -292,6 +292,7 @@ var _ = Describe("EnvManager", func() {
 
 		productNamespaceIsTerminating = false
 
+		err := mockcli.Delete(ctx, baseRuntime)
 		Expect(err).Should(BeNil())
 		err = mgr.Remove(ctx, task)
 		Expect(err).Should(BeNil())
