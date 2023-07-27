@@ -271,7 +271,7 @@ var _ = Describe("Deploy app argocd", func() {
 		Expect(err).Should(BeNil())
 		Expect(len(project.Spec.SourceRepos)).Should(Equal(1))
 		Expect(project.Spec.SourceRepos[0]).Should(Equal(targetURL))
-		Expect(len(project.Spec.Destinations)).Should(Equal(1))
+		Expect(len(project.Spec.Destinations)).Should(Equal(2))
 		Expect(project.Spec.Destinations[0].Namespace).Should(Equal(baseRuntime.Name))
 
 		baseRuntime.Status.DeployHistory = &nautescrd.DeployHistory{
@@ -334,7 +334,7 @@ var _ = Describe("Deploy app argocd", func() {
 		Expect(err).Should(BeNil())
 		Expect(len(project.Spec.SourceRepos)).Should(Equal(1))
 		Expect(project.Spec.SourceRepos[0]).Should(Equal(targetURL))
-		Expect(len(project.Spec.Destinations)).Should(Equal(1))
+		Expect(len(project.Spec.Destinations)).Should(Equal(2))
 		Expect(project.Spec.Destinations[0].Namespace).Should(Equal(baseRuntime.Name))
 
 		baseRuntime.Status.DeployHistory = &nautescrd.DeployHistory{
@@ -387,7 +387,7 @@ var _ = Describe("Deploy app argocd", func() {
 		Expect(err).Should(BeNil())
 		Expect(len(project.Spec.SourceRepos)).Should(Equal(1))
 		Expect(project.Spec.SourceRepos[0]).Should(Equal(targetURL))
-		Expect(len(project.Spec.Destinations)).Should(Equal(1))
+		Expect(len(project.Spec.Destinations)).Should(Equal(2))
 		Expect(project.Spec.Destinations[0].Namespace).Should(Equal(runtimeName))
 
 		mockcli.deployments = []nautescrd.DeploymentRuntime{}
@@ -424,7 +424,7 @@ var _ = Describe("Deploy app argocd", func() {
 		Expect(err).Should(BeNil())
 		Expect(len(project.Spec.SourceRepos)).Should(Equal(1))
 		Expect(project.Spec.SourceRepos[0]).Should(Equal(targetURL))
-		Expect(len(project.Spec.Destinations)).Should(Equal(2))
+		Expect(len(project.Spec.Destinations)).Should(Equal(3))
 	})
 
 	It("if cluster allow product create cluster resources, app project has permission to deploy on it.", func() {
@@ -452,7 +452,7 @@ var _ = Describe("Deploy app argocd", func() {
 		Expect(err).Should(BeNil())
 		Expect(len(project.Spec.SourceRepos)).Should(Equal(1))
 		Expect(project.Spec.SourceRepos[0]).Should(Equal(targetURL))
-		Expect(len(project.Spec.Destinations)).Should(Equal(1))
+		Expect(len(project.Spec.Destinations)).Should(Equal(2))
 		Expect(len(project.Spec.ClusterResourceWhitelist)).Should(Equal(1))
 	})
 })

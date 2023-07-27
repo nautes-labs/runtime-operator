@@ -64,6 +64,7 @@ func (d Syncer) Deploy(ctx context.Context, task interfaces.RuntimeSyncTask) (*i
 	appSource.RepoURL = repoURL
 	err = app.SyncApp(ctx, func(spec *argocrd.ApplicationSpec) {
 		spec.Source = *appSource
+		spec.Destination.Namespace = task.Product.Name
 		spec.Project = appProject.GetName()
 	})
 	if err != nil {
