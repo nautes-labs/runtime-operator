@@ -358,9 +358,12 @@ func (s *runtimeSyncer) calculateEventSourceGitlab(ctx context.Context, runtime 
 		if err != nil {
 			return nil, err
 		}
-		webhookEvents, err := getArgoEventSourceEventsFromCodeRepo(codeRepo.Spec.Webhook.Events)
-		if err != nil {
-			return nil, err
+		var webhookEvents []string
+		if codeRepo.Spec.Webhook != nil {
+			webhookEvents, err = getArgoEventSourceEventsFromCodeRepo(codeRepo.Spec.Webhook.Events)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		eventSourceSpec.Gitlab[eventName] = getGitlabEvent(endPoint, s, webhookEvents, accessTokenName, codeRepoProvider, codeRepo, secretTokenName)
