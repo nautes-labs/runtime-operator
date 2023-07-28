@@ -20,7 +20,7 @@ require (
 	github.com/hashicorp/vault/api v1.9.2
 	github.com/hashicorp/vault/api/auth/kubernetes v0.4.1
 	github.com/jinzhu/copier v0.3.5
-	github.com/nautes-labs/pkg v0.3.4-0.20230726012821-878a530d9c1f
+	github.com/nautes-labs/pkg v0.3.6
 	github.com/onsi/ginkgo/v2 v2.10.0
 	github.com/onsi/gomega v1.27.7
 	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1
@@ -122,7 +122,6 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/monochromegane/go-gitignore v0.0.0-20200626010858-205db1a8cc00 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/natefinch/lumberjack v0.0.0-20230119042236-215739b3bcdc // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
