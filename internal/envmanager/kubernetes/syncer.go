@@ -21,6 +21,7 @@ import (
 	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
 	"github.com/nautes-labs/pkg/pkg/kubeconvert"
 	interfaces "github.com/nautes-labs/runtime-operator/pkg/interface"
+	"github.com/nautes-labs/runtime-operator/pkg/utils"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -75,12 +76,16 @@ func (m Syncer) Sync(ctx context.Context, task interfaces.RuntimeSyncTask) (*int
 		return nil, fmt.Errorf("sync product authority failed: %w", err)
 	}
 
-	if err := destCluster.syncRuntimeNamespace(ctx, nil); err != nil {
+	if err := destCluster.syncRuntimeNamespace(ctx); err != nil {
 		return nil, fmt.Errorf("sync runtime namespace failed: %w", err)
 	}
 
 	if err := destCluster.syncRelationShip(ctx); err != nil {
 		return nil, fmt.Errorf("sync relationship namespace failed: %w", err)
+	}
+
+	if err := destCluster.SyncRole(ctx); err != nil {
+		return nil, fmt.Errorf("sync role %s failed: %w", destCluster.Runtime.GetName(), err)
 	}
 
 	syncResult := &interfaces.EnvironmentDeploymentResult{}
@@ -92,6 +97,18 @@ func (m Syncer) Sync(ctx context.Context, task interfaces.RuntimeSyncTask) (*int
 	err = destCluster.SyncRepo(ctx, repos)
 	if err != nil {
 		syncResult.Error = err
+	}
+
+	namespaces, err := utils.GetProductNamespacesInCluster(ctx, m.Client, task.Product.Name, task.Cluster.Name)
+	if err != nil {
+		return nil, fmt.Errorf("get namespaces failed: %w", err)
+	}
+
+	notUsedNamespace, err := destCluster.GetNotUsedNamespaces(ctx, namespaces)
+	for _, namespace := range notUsedNamespace {
+		if err := destCluster.deleteNamespace(ctx, namespace); err != nil {
+			return nil, fmt.Errorf("delete runtime namespace failed: %w", err)
+		}
 	}
 
 	return syncResult, nil
@@ -106,21 +123,29 @@ func (m Syncer) Remove(ctx context.Context, task interfaces.RuntimeSyncTask) err
 		return fmt.Errorf("create dest cluster client failed: %w", err)
 	}
 
-	if err := destCluster.deleteNamespace(ctx, task.Runtime.GetName()); err != nil {
-		return fmt.Errorf("delete runtime namespace failed: %w", err)
+	if err := destCluster.DeleteRole(ctx); err != nil {
+		return fmt.Errorf("delete secret role failed: %w", err)
 	}
 
-	deletable, err := destCluster.checkProductNamespaceIsUsing(ctx)
+	namespaces, err := utils.GetProductNamespacesInCluster(ctx, m.Client, task.Product.Name, task.Cluster.Name)
 	if err != nil {
-		return fmt.Errorf("check product namespace is using failed: %w", err)
+		return fmt.Errorf("get namespaces failed: %w", err)
 	}
-	if deletable {
-		logger.V(1).Info("threre are no namespace under product namespace , it will be delete", "NamespaceName", task.Product.Name)
+
+	notUsedNamespace, err := destCluster.GetNotUsedNamespaces(ctx, namespaces)
+	for _, namespace := range notUsedNamespace {
+		if err := destCluster.deleteNamespace(ctx, namespace); err != nil {
+			return fmt.Errorf("delete runtime namespace failed: %w", err)
+		}
+	}
+	if len(namespaces) == 1 {
+		logger.V(1).Info("runtime under product namespace is zero, it will be delete", "NamespaceName", task.Product.Name)
 
 		productCodeRepo, err := getProductCodeRepo(ctx, m.Client, task.Product.Name, task.NautesCfg.Nautes.Namespace)
 		if err != nil {
 			return fmt.Errorf("get product coderepo failed: %w", err)
 		}
+
 		if err := destCluster.deleteProductNamespace(ctx, productCodeRepo); err != nil {
 			return fmt.Errorf("delete product namespace failed: %w", err)
 		}

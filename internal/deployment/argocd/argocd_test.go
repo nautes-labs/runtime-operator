@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -34,6 +35,8 @@ import (
 var codeRepoProvider *nautescrd.CodeRepoProvider
 var product *nautescrd.Product
 var baseCodeRepo *nautescrd.CodeRepo
+var baseEnvironment *nautescrd.Environment
+var baseCluster *nautescrd.Cluster
 var targetURL string
 
 func updateURL() {
@@ -41,8 +44,14 @@ func updateURL() {
 }
 
 var _ = Describe("Deploy app argocd", func() {
+	var cleanQueue []client.Object
 	var productName string
+	var productPath string
 	var runtimeName string
+	var environmentName string
+	var clusterName string
+	var repoID string
+	var repoName string
 	var baseRuntime *nautescrd.DeploymentRuntime
 	var err error
 	var ns *corev1.Namespace
@@ -50,8 +59,18 @@ var _ = Describe("Deploy app argocd", func() {
 	var task interfaces.RuntimeSyncTask
 
 	BeforeEach(func() {
-		productName = fmt.Sprintf("test-project-%s", randNum())
-		runtimeName = fmt.Sprintf("runtime-%s", randNum())
+		seed := randNum()
+
+		cleanQueue = []client.Object{}
+		_ = cleanQueue
+
+		productName = fmt.Sprintf("product-%s", seed)
+		productPath = fmt.Sprintf("productPath-%s", seed)
+		runtimeName = fmt.Sprintf("runtime-%s", seed)
+		environmentName = fmt.Sprintf("environment-%s", seed)
+		clusterName = fmt.Sprintf("cluster-%s", seed)
+		repoID = fmt.Sprintf("repo-%s", seed)
+		repoName = fmt.Sprintf("repoName-%s", seed)
 
 		ns = &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
@@ -63,7 +82,7 @@ var _ = Describe("Deploy app argocd", func() {
 
 		codeRepoProvider = &nautescrd.CodeRepoProvider{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("gitlab-%s", randNum()),
+				Name:      fmt.Sprintf("gitlab-%s", seed),
 				Namespace: nautesNamespace,
 			},
 			Spec: nautescrd.CodeRepoProviderSpec{
@@ -80,30 +99,60 @@ var _ = Describe("Deploy app argocd", func() {
 				Namespace: nautesNamespace,
 			},
 			Spec: nautescrd.ProductSpec{
-				Name:         fmt.Sprintf("%s-name", productName),
+				Name:         productPath,
 				MetaDataPath: "",
+			},
+		}
+
+		baseCluster = &nautescrd.Cluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      clusterName,
+				Namespace: nautesNamespace,
+			},
+			Spec: nautescrd.ClusterSpec{
+				ApiServer:   "https://127.0.0.1:6443",
+				ClusterType: nautescrd.CLUSTER_TYPE_PHYSICAL,
+				ClusterKind: nautescrd.CLUSTER_KIND_KUBERNETES,
+				Usage:       nautescrd.CLUSTER_USAGE_WORKER,
+				WorkerType:  nautescrd.ClusterWorkTypeDeployment,
+				ComponentsList: nautescrd.ComponentsList{
+					Deployment: &nautescrd.Component{
+						Name:      "argocd",
+						Namespace: "argocd",
+					},
+				},
+				ReservedNamespacesAllowedProducts: map[string][]string{},
+				ProductAllowedClusterResources:    map[string][]nautescrd.ClusterResourceInfo{},
+			},
+		}
+
+		baseEnvironment = &nautescrd.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      environmentName,
+				Namespace: productName,
+			},
+			Spec: nautescrd.EnvironmentSpec{
+				Product: productName,
+				Cluster: clusterName,
+				EnvType: "",
 			},
 		}
 
 		baseCodeRepo = &nautescrd.CodeRepo{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("repo-%s", randNum()),
-				Namespace: nautesNamespace,
+				Name:      repoID,
+				Namespace: productName,
 			},
 			Spec: nautescrd.CodeRepoSpec{
 				CodeRepoProvider:  codeRepoProvider.Name,
 				Product:           productName,
 				Project:           "",
-				RepoName:          "myproject",
+				RepoName:          repoName,
 				URL:               "",
 				DeploymentRuntime: false,
 				PipelineRuntime:   false,
 			},
 		}
-		mockcli.provider = codeRepoProvider
-		mockcli.product = product
-		mockcli.codeRepo = baseCodeRepo
-		updateURL()
 
 		baseRuntime = &nautescrd.DeploymentRuntime{
 			ObjectMeta: metav1.ObjectMeta{
@@ -117,8 +166,20 @@ var _ = Describe("Deploy app argocd", func() {
 					TargetRevision: "HEAD",
 					Path:           "/production",
 				},
+				Destination: nautescrd.DeploymentRuntimesDestination{
+					Environment: environmentName,
+					Namespaces:  []string{runtimeName},
+				},
 			},
 		}
+
+		mockcli.provider = codeRepoProvider
+		mockcli.product = product
+		mockcli.codeRepo = baseCodeRepo
+		mockcli.environment = []nautescrd.Environment{*baseEnvironment}
+		mockcli.cluster = []nautescrd.Cluster{*baseCluster}
+		mockcli.deployments = []nautescrd.DeploymentRuntime{*baseRuntime}
+		updateURL()
 
 		task = interfaces.RuntimeSyncTask{
 			AccessInfo:  accessInfo,
@@ -131,6 +192,11 @@ var _ = Describe("Deploy app argocd", func() {
 	})
 
 	AfterEach(func() {
+		for i, runtime := range mockcli.deployments {
+			if runtime.Name == baseRuntime.Name {
+				mockcli.deployments[i].DeletionTimestamp = &metav1.Time{Time: time.Now()}
+			}
+		}
 		err = mgr.UnDeploy(ctx, task)
 		Expect(err).Should(BeNil())
 
@@ -195,7 +261,6 @@ var _ = Describe("Deploy app argocd", func() {
 		err = k8sClient.Get(ctx, key, app)
 		Expect(err).Should(BeNil())
 		Expect(app.Spec.Source.RepoURL).Should(Equal(targetURL))
-		Expect(app.Spec.Destination.Namespace).Should(Equal(baseRuntime.Name))
 
 		project := &argocrd.AppProject{}
 		key = types.NamespacedName{
@@ -206,12 +271,15 @@ var _ = Describe("Deploy app argocd", func() {
 		Expect(err).Should(BeNil())
 		Expect(len(project.Spec.SourceRepos)).Should(Equal(1))
 		Expect(project.Spec.SourceRepos[0]).Should(Equal(targetURL))
-		Expect(len(project.Spec.Destinations)).Should(Equal(1))
+		Expect(len(project.Spec.Destinations)).Should(Equal(2))
 		Expect(project.Spec.Destinations[0].Namespace).Should(Equal(baseRuntime.Name))
 
 		baseRuntime.Status.DeployHistory = &nautescrd.DeployHistory{
-			Destination: "",
-			Source:      targetURL,
+			Destination: nautescrd.DeploymentRuntimesDestination{
+				Environment: "",
+				Namespaces:  []string{},
+			},
+			Source: targetURL,
 		}
 
 		cm := &corev1.ConfigMap{}
@@ -256,7 +324,6 @@ var _ = Describe("Deploy app argocd", func() {
 		err = k8sClient.Get(ctx, key, app)
 		Expect(err).Should(BeNil())
 		Expect(app.Spec.Source.RepoURL).Should(Equal(targetURL))
-		Expect(app.Spec.Destination.Namespace).Should(Equal(baseRuntime.Name))
 
 		project := &argocrd.AppProject{}
 		key = types.NamespacedName{
@@ -267,12 +334,15 @@ var _ = Describe("Deploy app argocd", func() {
 		Expect(err).Should(BeNil())
 		Expect(len(project.Spec.SourceRepos)).Should(Equal(1))
 		Expect(project.Spec.SourceRepos[0]).Should(Equal(targetURL))
-		Expect(len(project.Spec.Destinations)).Should(Equal(1))
+		Expect(len(project.Spec.Destinations)).Should(Equal(2))
 		Expect(project.Spec.Destinations[0].Namespace).Should(Equal(baseRuntime.Name))
 
 		baseRuntime.Status.DeployHistory = &nautescrd.DeployHistory{
-			Destination: "",
-			Source:      targetURL,
+			Destination: nautescrd.DeploymentRuntimesDestination{
+				Environment: "",
+				Namespaces:  []string{},
+			},
+			Source: targetURL,
 		}
 	})
 
@@ -287,7 +357,7 @@ var _ = Describe("Deploy app argocd", func() {
 		}
 
 		runtime2 := baseRuntime.DeepCopy()
-		runtime2.Name = fmt.Sprintf("other-runtime-%s", randNum())
+		runtime2.Name = fmt.Sprintf("%s-2", baseRuntime.Name)
 		task.Runtime = runtime2
 
 		source, err = mgr.Deploy(ctx, task)
@@ -317,8 +387,8 @@ var _ = Describe("Deploy app argocd", func() {
 		Expect(err).Should(BeNil())
 		Expect(len(project.Spec.SourceRepos)).Should(Equal(1))
 		Expect(project.Spec.SourceRepos[0]).Should(Equal(targetURL))
-		Expect(len(project.Spec.Destinations)).Should(Equal(1))
-		Expect(project.Spec.Destinations[0].Namespace).Should(Equal(runtime2.Name))
+		Expect(len(project.Spec.Destinations)).Should(Equal(2))
+		Expect(project.Spec.Destinations[0].Namespace).Should(Equal(runtimeName))
 
 		mockcli.deployments = []nautescrd.DeploymentRuntime{}
 		task.Runtime = runtime2
@@ -326,9 +396,63 @@ var _ = Describe("Deploy app argocd", func() {
 		Expect(err).Should(BeNil())
 
 		baseRuntime.Status.DeployHistory = &nautescrd.DeployHistory{
-			Destination: "",
-			Source:      targetURL,
+			Destination: nautescrd.DeploymentRuntimesDestination{
+				Environment: "",
+				Namespaces:  []string{},
+			},
+			Source: targetURL,
 		}
 	})
 
+	It("if cluster allow product use namespace, app project has permission to deploy on it.", func() {
+		baseCluster.Spec.ReservedNamespacesAllowedProducts = map[string][]string{
+			"argocd": {productPath},
+		}
+		baseCluster.Status.ProductIDMap = map[string]string{
+			productPath: productName,
+		}
+		mockcli.cluster = []nautescrd.Cluster{*baseCluster}
+		_, err := mgr.Deploy(ctx, task)
+		Expect(err).Should(BeNil())
+
+		project := &argocrd.AppProject{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: argoNamespace,
+				Name:      productName,
+			}}
+		err = k8sClient.Get(ctx, client.ObjectKeyFromObject(project), project)
+		Expect(err).Should(BeNil())
+		Expect(len(project.Spec.SourceRepos)).Should(Equal(1))
+		Expect(project.Spec.SourceRepos[0]).Should(Equal(targetURL))
+		Expect(len(project.Spec.Destinations)).Should(Equal(3))
+	})
+
+	It("if cluster allow product create cluster resources, app project has permission to deploy on it.", func() {
+		baseCluster.Spec.ProductAllowedClusterResources = map[string][]nautescrd.ClusterResourceInfo{
+			productPath: {
+				{
+					Kind:  "ClusterRole",
+					Group: "authorization.k8s.io",
+				},
+			},
+		}
+		baseCluster.Status.ProductIDMap = map[string]string{
+			productPath: productName,
+		}
+		mockcli.cluster = []nautescrd.Cluster{*baseCluster}
+		_, err := mgr.Deploy(ctx, task)
+		Expect(err).Should(BeNil())
+
+		project := &argocrd.AppProject{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: argoNamespace,
+				Name:      productName,
+			}}
+		err = k8sClient.Get(ctx, client.ObjectKeyFromObject(project), project)
+		Expect(err).Should(BeNil())
+		Expect(len(project.Spec.SourceRepos)).Should(Equal(1))
+		Expect(project.Spec.SourceRepos[0]).Should(Equal(targetURL))
+		Expect(len(project.Spec.Destinations)).Should(Equal(2))
+		Expect(len(project.Spec.ClusterResourceWhitelist)).Should(Equal(1))
+	})
 })

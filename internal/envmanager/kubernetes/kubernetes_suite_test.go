@@ -25,6 +25,7 @@ import (
 	"time"
 
 	externalsecretcrd "github.com/external-secrets/external-secrets/apis/externalsecrets/v1alpha1"
+	"github.com/jinzhu/copier"
 	nautescrd "github.com/nautes-labs/pkg/api/v1alpha1"
 	convert "github.com/nautes-labs/pkg/pkg/kubeconvert"
 	nautescfg "github.com/nautes-labs/pkg/pkg/nautesconfigs"
@@ -41,6 +42,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/kubectl/pkg/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -57,7 +59,7 @@ var k8sClient client.Client
 var testEnv *envtest.Environment
 var ctx context.Context
 var nautesCFG *nautescfg.Config
-var mockK8SClient *mockClient
+var mockcli *mockClient
 
 var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
@@ -129,7 +131,7 @@ secret:
 		},
 	})
 
-	mockK8SClient = &mockClient{}
+	mockcli = &mockClient{}
 
 }
 
@@ -150,41 +152,198 @@ func isNotTerminatingAndBelongsToProduct(res client.Object, productName string) 
 }
 
 type mockClient struct {
-	ArtifactProvider *nautescrd.ArtifactRepoProvider
-	ArtifactRepos    []nautescrd.ArtifactRepo
-	CodeRepos        []nautescrd.CodeRepo
+	resourceDBs map[string]*resourceDB
+	scheme      *runtime.Scheme
+}
+
+type resourceDB struct {
+	resource map[string]client.Object
+}
+
+func newMockClient() *mockClient {
+	return &mockClient{
+		resourceDBs: map[string]*resourceDB{},
+		scheme:      scheme.Scheme,
+	}
+}
+
+func (c *mockClient) getResourceType(obj runtime.Object) (string, error) {
+	gvk, err := apiutil.GVKForObject(obj, c.scheme)
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%s/%s/%s", gvk.Group, gvk.Version, gvk.Kind), nil
+}
+
+func (c *mockClient) getResourceDB(obj runtime.Object) (*resourceDB, error) {
+	index, err := c.getResourceType(obj)
+	if err != nil {
+		return nil, err
+	}
+	if c.resourceDBs[index] == nil {
+		c.resourceDBs[index] = &resourceDB{
+			resource: map[string]client.Object{},
+		}
+	}
+
+	return c.resourceDBs[index], nil
+}
+
+func (c *resourceDB) GetIndex(obj client.Object) string {
+	return fmt.Sprintf("%s/%s", obj.GetNamespace(), obj.GetName())
+}
+
+func (r *resourceDB) GetResource(obj client.Object) (client.Object, error) {
+	objInDB, ok := r.resource[r.GetIndex(obj)]
+	if !ok {
+		return nil, fmt.Errorf("resouce %s not found", r.GetIndex(obj))
+	}
+
+	return objInDB, nil
+}
+
+func (r *resourceDB) AddResource(obj client.Object) error {
+	index := r.GetIndex(obj)
+	if _, ok := r.resource[index]; ok {
+		return fmt.Errorf("resource %s is already exited.", index)
+	}
+
+	r.resource[index] = obj
+	return nil
+}
+
+func (r *resourceDB) UpdateResource(obj client.Object) error {
+	index := r.GetIndex(obj)
+	if _, ok := r.resource[index]; !ok {
+		return fmt.Errorf("resource %s is not exited.", index)
+	}
+
+	r.resource[index] = obj
+	return nil
+}
+
+func (r *resourceDB) DeleteResource(obj client.Object) error {
+	index := r.GetIndex(obj)
+	_, ok := r.resource[index]
+	if !ok {
+		return nil
+	}
+
+	delete(r.resource, index)
+	return nil
 }
 
 func (c *mockClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	obj.(*nautescrd.ArtifactRepoProvider).ObjectMeta = c.ArtifactProvider.ObjectMeta
-	obj.(*nautescrd.ArtifactRepoProvider).Spec = c.ArtifactProvider.Spec
+	obj.SetName(key.Name)
+	obj.SetNamespace(key.Namespace)
+	resourceDB, err := c.getResourceDB(obj)
+	if err != nil {
+		return err
+	}
+
+	objInClient, err := resourceDB.GetResource(obj)
+	if err != nil {
+		return err
+	}
+
+	if err := copier.Copy(obj, objInClient); err != nil {
+		return err
+	}
+
 	return nil
 }
 
 func (c *mockClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-	switch obj := list.(type) {
-	case *nautescrd.CodeRepoList:
-		for _, coderepo := range c.CodeRepos {
-			obj.Items = append(obj.Items, coderepo)
-		}
-		return nil
-	case *nautescrd.ArtifactRepoList:
-		list.(*nautescrd.ArtifactRepoList).Items = c.ArtifactRepos
-		return nil
+	resourceType, err := c.getResourceType(list)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("unknow list type")
+
+	switch resourceType {
+	case "nautes.resource.nautes.io/v1alpha1/CodeRepoList":
+		resourceDB, _ := c.getResourceDB(&nautescrd.CodeRepo{})
+		objList := &nautescrd.CodeRepoList{
+			Items: []nautescrd.CodeRepo{},
+		}
+
+		for _, codeRepo := range resourceDB.resource {
+			obj := &nautescrd.CodeRepo{}
+			copier.Copy(obj, codeRepo)
+			objList.Items = append(objList.Items, *obj)
+		}
+
+		copier.Copy(list, objList)
+	case "nautes.resource.nautes.io/v1alpha1/ArtifactRepoList":
+		resourceDB, _ := c.getResourceDB(&nautescrd.ArtifactRepo{})
+		objList := &nautescrd.ArtifactRepoList{
+			Items: []nautescrd.ArtifactRepo{},
+		}
+
+		for _, artiRepo := range resourceDB.resource {
+			obj := &nautescrd.ArtifactRepo{}
+			copier.Copy(obj, artiRepo)
+			objList.Items = append(objList.Items, *obj)
+		}
+
+		copier.Copy(list, objList)
+	case "nautes.resource.nautes.io/v1alpha1/DeploymentRuntimeList":
+		resourceDB, _ := c.getResourceDB(&nautescrd.DeploymentRuntime{})
+		objList := &nautescrd.DeploymentRuntimeList{
+			Items: []nautescrd.DeploymentRuntime{},
+		}
+
+		for _, deployRuntime := range resourceDB.resource {
+			obj := &nautescrd.DeploymentRuntime{}
+			copier.Copy(obj, deployRuntime)
+			objList.Items = append(objList.Items, *obj)
+		}
+
+		copier.Copy(list, objList)
+	case "nautes.resource.nautes.io/v1alpha1/ProjectPipelineRuntimeList":
+		resourceDB, _ := c.getResourceDB(&nautescrd.ProjectPipelineRuntime{})
+		objList := &nautescrd.ProjectPipelineRuntimeList{
+			Items: []nautescrd.ProjectPipelineRuntime{},
+		}
+
+		for _, pipelineRuntime := range resourceDB.resource {
+			obj := &nautescrd.ProjectPipelineRuntime{}
+			copier.Copy(obj, pipelineRuntime)
+			objList.Items = append(objList.Items, *obj)
+		}
+
+		copier.Copy(list, objList)
+	default:
+		return fmt.Errorf("resource type %s is not supported", resourceType)
+	}
+	return nil
 }
 
 func (c *mockClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
-	return nil
+	resourceDB, err := c.getResourceDB(obj)
+	if err != nil {
+		return err
+	}
+
+	return resourceDB.AddResource(obj)
 }
 
 func (c *mockClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
-	return nil
+	resourceDB, err := c.getResourceDB(obj)
+	if err != nil {
+		return err
+	}
+
+	return resourceDB.DeleteResource(obj)
 }
 
 func (c *mockClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
-	return nil
+	resourceDB, err := c.getResourceDB(obj)
+	if err != nil {
+		return err
+	}
+
+	return resourceDB.UpdateResource(obj)
 }
 
 func (c *mockClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {

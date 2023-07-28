@@ -52,12 +52,19 @@ var _ = Describe("EnvManager", func() {
 
 	var productCodeRepo *nautescrd.CodeRepo
 	var task interfaces.RuntimeSyncTask
+
+	var destNamespace string
 	BeforeEach(func() {
-		productName = fmt.Sprintf("test-project-%s", randNum())
-		groupName = fmt.Sprintf("group-%s", randNum())
-		runtimeName = fmt.Sprintf("runtime-%s", randNum())
-		artifactRepoName = fmt.Sprintf("artifact-repo-%s", randNum())
+		seed := randNum()
+		productName = fmt.Sprintf("test-project-%s", seed)
+		groupName = fmt.Sprintf("group-%s", seed)
+		runtimeName = fmt.Sprintf("runtime-%s", seed)
+		artifactRepoName = fmt.Sprintf("artifact-repo-%s", seed)
 		secretDBName = "repo"
+		productCodeRepoName := fmt.Sprintf("repo-%s", seed)
+		mockcli = newMockClient()
+		destNamespace = fmt.Sprintf("dest-namespace-%s", seed)
+		envName := fmt.Sprintf("environment-%s", seed)
 
 		accessInfo, err = mgr.GetAccessInfo(ctx, nautescrd.Cluster{
 			ObjectMeta: metav1.ObjectMeta{
@@ -67,9 +74,15 @@ var _ = Describe("EnvManager", func() {
 		})
 		Expect(err).Should(BeNil())
 
+		namespace := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: productName,
+			},
+		}
+
 		productCodeRepo = &nautescrd.CodeRepo{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("repo-%s", randNum()),
+				Name:      productCodeRepoName,
 				Namespace: "nautes",
 			},
 			Spec: nautescrd.CodeRepoSpec{
@@ -81,7 +94,12 @@ var _ = Describe("EnvManager", func() {
 			},
 		}
 
-		mockK8SClient.CodeRepos = []nautescrd.CodeRepo{*productCodeRepo}
+		env := &nautescrd.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      envName,
+				Namespace: productName,
+			},
+		}
 
 		baseRuntime = &nautescrd.DeploymentRuntime{
 			ObjectMeta: metav1.ObjectMeta{
@@ -91,7 +109,10 @@ var _ = Describe("EnvManager", func() {
 			Spec: nautescrd.DeploymentRuntimeSpec{
 				Product:        productName,
 				ManifestSource: nautescrd.ManifestSource{},
-				Destination:    "",
+				Destination: nautescrd.DeploymentRuntimesDestination{
+					Environment: envName,
+					Namespaces:  []string{destNamespace},
+				},
 			},
 		}
 
@@ -141,8 +162,15 @@ var _ = Describe("EnvManager", func() {
 			},
 		}
 
-		mockK8SClient.ArtifactProvider = artifactProvier
-		mockK8SClient.ArtifactRepos = artifactRepos
+		mockcli.Create(ctx, namespace)
+		mockcli.Create(ctx, productCodeRepo)
+		mockcli.Create(ctx, artifactProvier)
+		mockcli.Create(ctx, baseRuntime)
+		mockcli.Create(ctx, env)
+
+		for _, repo := range artifactRepos {
+			mockcli.Create(ctx, &repo)
+		}
 		productNamespaceIsTerminating = true
 
 		secretKey = fmt.Sprintf("%s/%s/%s/default/readonly", artifactProvier.Name, artifactProvier.Spec.ProviderType, artifactRepos[0].Name)
@@ -151,10 +179,13 @@ var _ = Describe("EnvManager", func() {
 		err = os.Setenv("TEST_SECRET_KEY", secretKey)
 		Expect(err).Should(BeNil())
 
-		mgr = envmgr.Syncer{mockK8SClient}
+		mgr = envmgr.Syncer{mockcli}
 	})
 
 	AfterEach(func() {
+		err = mockcli.Delete(ctx, baseRuntime)
+		Expect(err).Should(BeNil())
+
 		err = mgr.Remove(ctx, task)
 		Expect(err).Should(BeNil())
 
@@ -167,21 +198,16 @@ var _ = Describe("EnvManager", func() {
 		ok := isNotTerminatingAndBelongsToProduct(ns, productName)
 		Expect(ok).ShouldNot(Equal(productNamespaceIsTerminating))
 
-		key = types.NamespacedName{
-			Name: runtimeName,
+		for _, namespace := range baseRuntime.Spec.Destination.Namespaces {
+			key = types.NamespacedName{
+				Name: namespace,
+			}
+			err = k8sClient.Get(ctx, key, ns)
+			Expect(err).Should(BeNil())
+			ok = isNotTerminatingAndBelongsToProduct(ns, productName)
+			Expect(ok).Should(BeFalse())
 		}
-		err = k8sClient.Get(ctx, key, ns)
-		Expect(err).Should(BeNil())
-		ok = isNotTerminatingAndBelongsToProduct(ns, productName)
-		Expect(ok).Should(BeFalse())
 
-		key = types.NamespacedName{
-			Namespace: runtimeName,
-			Name:      _HNC_CONFIG_NAME,
-		}
-		hnc := &hncv1alpha2.HierarchyConfiguration{}
-		err = k8sClient.Get(ctx, key, hnc)
-		Expect(client.IgnoreNotFound(err)).Should(BeNil())
 	})
 
 	It("init a new env", func() {
@@ -197,21 +223,11 @@ var _ = Describe("EnvManager", func() {
 		Expect(ok).Should(BeTrue())
 
 		key = types.NamespacedName{
-			Name: runtimeName,
+			Name: destNamespace,
 		}
 		err = k8sClient.Get(ctx, key, ns)
 		Expect(err).Should(BeNil())
 		ok = isNotTerminatingAndBelongsToProduct(ns, productName)
-		Expect(ok).Should(BeTrue())
-
-		key = types.NamespacedName{
-			Namespace: runtimeName,
-			Name:      _HNC_CONFIG_NAME,
-		}
-		hnc := &hncv1alpha2.HierarchyConfiguration{}
-		err = k8sClient.Get(ctx, key, hnc)
-		Expect(err).Should(BeNil())
-		ok = isNotTerminatingAndBelongsToProduct(hnc, productName)
 		Expect(ok).Should(BeTrue())
 	})
 
@@ -231,21 +247,11 @@ var _ = Describe("EnvManager", func() {
 		Expect(ok).Should(BeTrue())
 
 		key = types.NamespacedName{
-			Name: runtimeName,
+			Name: destNamespace,
 		}
 		err = k8sClient.Get(ctx, key, ns)
 		Expect(err).Should(BeNil())
 		ok = isNotTerminatingAndBelongsToProduct(ns, productName)
-		Expect(ok).Should(BeTrue())
-
-		key = types.NamespacedName{
-			Namespace: runtimeName,
-			Name:      _HNC_CONFIG_NAME,
-		}
-		hnc := &hncv1alpha2.HierarchyConfiguration{}
-		err = k8sClient.Get(ctx, key, hnc)
-		Expect(err).Should(BeNil())
-		ok = isNotTerminatingAndBelongsToProduct(hnc, productName)
 		Expect(ok).Should(BeTrue())
 	})
 
@@ -254,14 +260,14 @@ var _ = Describe("EnvManager", func() {
 		Expect(err).Should(BeNil())
 
 		key := types.NamespacedName{
-			Namespace: runtimeName,
+			Namespace: destNamespace,
 			Name:      _HNC_CONFIG_NAME,
 		}
 		hnc := &hncv1alpha2.HierarchyConfiguration{}
 		err = k8sClient.Get(ctx, key, hnc)
 		Expect(err).Should(BeNil())
 
-		hnc.Spec.Parent = fmt.Sprintf("other-product-%s", randNum())
+		hnc.Spec.Parent = fmt.Sprintf("%s-2", productName)
 		err = k8sClient.Update(ctx, hnc)
 		Expect(err).Should(BeNil())
 
@@ -275,19 +281,19 @@ var _ = Describe("EnvManager", func() {
 	})
 
 	It("do not delete product namespace if deployment has other runtime", func() {
+		runtime2 := baseRuntime.DeepCopy()
+		runtime2.Name = fmt.Sprintf("%s-2", baseRuntime.Name)
+		runtime2.Spec.Destination.Namespaces = []string{fmt.Sprintf("%s-2", baseRuntime.Spec.Destination.Namespaces[0])}
+		err = mockcli.Create(ctx, runtime2)
+		Expect(err).Should(BeNil())
+
 		_, err = mgr.Sync(ctx, task)
 		Expect(err).Should(BeNil())
 
-		k8sClient.Create(ctx, &hncv1alpha2.HierarchyConfiguration{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      _HNC_CONFIG_NAME,
-				Namespace: productName,
-			},
-			Status: hncv1alpha2.HierarchyConfigurationStatus{
-				Children: []string{randNum()},
-			},
-		})
 		productNamespaceIsTerminating = false
+
+		err := mockcli.Delete(ctx, baseRuntime)
+		Expect(err).Should(BeNil())
 		err = mgr.Remove(ctx, task)
 		Expect(err).Should(BeNil())
 
@@ -301,20 +307,12 @@ var _ = Describe("EnvManager", func() {
 		Expect(ok).Should(BeTrue())
 
 		key = types.NamespacedName{
-			Name: runtimeName,
+			Name: destNamespace,
 		}
 		err = k8sClient.Get(ctx, key, ns)
 		Expect(err).Should(BeNil())
 		ok = isNotTerminatingAndBelongsToProduct(ns, productName)
 		Expect(ok).Should(BeFalse())
-
-		key = types.NamespacedName{
-			Namespace: runtimeName,
-			Name:      _HNC_CONFIG_NAME,
-		}
-		hnc := &hncv1alpha2.HierarchyConfiguration{}
-		err = k8sClient.Get(ctx, key, hnc)
-		Expect(client.IgnoreNotFound(err)).Should(BeNil())
 	})
 
 	It("if namespace is not belongs to runtime, it should not be delete", func() {
@@ -323,7 +321,7 @@ var _ = Describe("EnvManager", func() {
 
 		ns := &corev1.Namespace{}
 		key := types.NamespacedName{
-			Name: runtimeName,
+			Name: destNamespace,
 		}
 		err = k8sClient.Get(ctx, key, ns)
 		Expect(err).Should(BeNil())
@@ -336,7 +334,7 @@ var _ = Describe("EnvManager", func() {
 
 		ns = &corev1.Namespace{}
 		key = types.NamespacedName{
-			Name: runtimeName,
+			Name: destNamespace,
 		}
 		err = k8sClient.Get(ctx, key, ns)
 		Expect(err).Should(BeNil())
@@ -344,5 +342,20 @@ var _ = Describe("EnvManager", func() {
 
 		err = k8sClient.Delete(ctx, ns)
 		Expect(err).Should(BeNil())
+	})
+
+	It("if destination has many namesapces, it will create many namespaces", func() {
+		baseRuntime.Spec.Destination.Namespaces = append(baseRuntime.Spec.Destination.Namespaces, fmt.Sprintf("%s-2", destNamespace))
+		err = mockcli.Update(ctx, baseRuntime)
+		Expect(err).Should(BeNil())
+
+		task.Runtime = baseRuntime
+		_, err = mgr.Sync(ctx, task)
+		Expect(err).Should(BeNil())
+
+		nsList := &corev1.NamespaceList{}
+		err = k8sClient.List(ctx, nsList, client.MatchingLabels(task.GetLabel()))
+		Expect(err).Should(BeNil())
+		Expect(len(nsList.Items)).Should(Equal(3))
 	})
 })

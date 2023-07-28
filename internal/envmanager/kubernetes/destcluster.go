@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -39,6 +40,7 @@ import (
 	externalsecretcrd "github.com/external-secrets/external-secrets/apis/externalsecrets/v1alpha1"
 
 	esmetav1 "github.com/external-secrets/external-secrets/apis/meta/v1"
+	runtimeerrors "github.com/nautes-labs/runtime-operator/pkg/error"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -167,20 +169,16 @@ const (
 	secretKeySecretStoreCA  = "ca.crt"
 )
 
-func (c *destCluster) syncRuntimeNamespace(ctx context.Context, codeRepo *nautescrd.CodeRepo) error {
-	namespaceName := c.Runtime.GetName()
-	if err := c.syncNamespace(ctx, namespaceName); err != nil {
-		return fmt.Errorf("sync namespace %s failed: %w", namespaceName, err)
-	}
+func (c *destCluster) syncRuntimeNamespace(ctx context.Context) error {
+	for _, namespaceName := range c.Runtime.GetNamespaces() {
+		if err := c.syncNamespace(ctx, namespaceName); err != nil {
+			return fmt.Errorf("sync namespace %s failed: %w", namespaceName, err)
+		}
 
-	if err := c.SyncRole(ctx, namespaceName); err != nil {
-		return fmt.Errorf("sync role %s failed: %w", namespaceName, err)
+		if err := c.syncCA(ctx, namespaceName); err != nil {
+			return fmt.Errorf("sync secret store ca failed: %w", err)
+		}
 	}
-
-	if err := c.syncCA(ctx, namespaceName); err != nil {
-		return fmt.Errorf("sync secret store ca failed: %w", err)
-	}
-
 	return nil
 }
 
@@ -197,19 +195,17 @@ func (c *destCluster) syncCA(ctx context.Context, namespaceName string) error {
 	}
 
 	if ca != "" {
-		_, err := controllerutil.CreateOrUpdate(ctx, c.k8sClient, secretStoreCASecret, func() error {
+		if _, err := controllerutil.CreateOrUpdate(ctx, c.k8sClient, secretStoreCASecret, func() error {
 			secretStoreCASecret.Data = map[string][]byte{
 				secretKeySecretStoreCA: []byte(ca),
 			}
 			return nil
-		})
-		if err != nil {
+		}); err != nil {
 			return err
 		}
 	} else {
-		err := c.k8sClient.Delete(ctx, secretStoreCASecret)
-		if client.IgnoreNotFound(err) != nil {
-			return err
+		if err := c.k8sClient.Delete(ctx, secretStoreCASecret); err != nil {
+			return client.IgnoreNotFound(err)
 		}
 	}
 
@@ -262,42 +258,29 @@ func (c *destCluster) syncCodeRepo(ctx context.Context, coderepo nautescrd.CodeR
 func (c *destCluster) syncRelationShip(ctx context.Context) error {
 	labels := map[string]string{nautescrd.LABEL_BELONG_TO_PRODUCT: c.Product.Name}
 
-	hncConfig := &hncv1alpha2.HierarchyConfiguration{}
-	key := types.NamespacedName{
-		Namespace: c.Runtime.GetName(),
-		Name:      _HNC_CONFIG_NAME,
-	}
-	err := c.k8sClient.Get(ctx, key, hncConfig)
-	if err != nil {
-		if client.IgnoreNotFound(err) != nil {
-			return err
-		}
-
+	for _, namespace := range c.Runtime.GetNamespaces() {
 		hncConfig := &hncv1alpha2.HierarchyConfiguration{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      key.Name,
-				Namespace: key.Namespace,
+				Namespace: namespace,
+				Name:      _HNC_CONFIG_NAME,
 				Labels:    labels,
-			},
-			Spec: hncv1alpha2.HierarchyConfigurationSpec{
-				Parent: c.Product.Name,
 			},
 		}
 
-		return c.k8sClient.Create(ctx, hncConfig)
+		_, err := controllerutil.CreateOrUpdate(ctx, c.k8sClient, hncConfig, func() error {
+			reason, ok := utils.IsLegal(hncConfig, c.Product.Name)
+			if !ok {
+				return fmt.Errorf(reason)
+			}
+			hncConfig.Spec.Parent = c.Product.Name
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("set %s's paremt failed: %w", namespace, err)
+		}
 	}
 
-	reason, ok := utils.IsLegal(hncConfig, c.Product.Name)
-	if !ok {
-		return fmt.Errorf(reason)
-	}
-
-	if hncConfig.Spec.Parent == c.Product.Name {
-		return nil
-	}
-
-	hncConfig.Spec.Parent = c.Product.Name
-	return c.k8sClient.Update(ctx, hncConfig)
+	return nil
 }
 
 func (c *destCluster) syncProductAuthority(ctx context.Context) error {
@@ -305,79 +288,37 @@ func (c *destCluster) syncProductAuthority(ctx context.Context) error {
 }
 
 func (c *destCluster) syncAuthority(ctx context.Context, namespace, groupName string) error {
-	roleBinding := &rbacv1.RoleBinding{}
-	key := types.NamespacedName{
-		Namespace: namespace,
-		Name:      _ROLE_BINDING_NAME_PRODUCT,
+	roleBinding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      _ROLE_BINDING_NAME_PRODUCT,
+			Namespace: namespace,
+			Labels:    c.resouceLable,
+		},
 	}
 
-	subjects := make([]rbacv1.Subject, len(roleBindingTemplate.Subjects))
-	copy(subjects, roleBinding.Subjects)
-	subjects[0].APIGroup = roleBindingTemplate.Subjects[0].APIGroup
-	subjects[0].Kind = roleBindingTemplate.Subjects[0].Kind
-	subjects[0].Name = groupName
-
-	err := c.k8sClient.Get(ctx, key, roleBinding)
-	if err != nil {
-		if client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("get rolebinding failed: %w", err)
+	_, err := controllerutil.CreateOrUpdate(ctx, c.k8sClient, roleBinding, func() error {
+		reason, ok := utils.IsLegal(roleBinding, c.Product.Name)
+		if !ok {
+			return fmt.Errorf(reason)
 		}
 
-		roleBinding := roleBindingTemplate.DeepCopy()
-		roleBinding.Name = key.Name
-		roleBinding.Namespace = key.Namespace
-		roleBinding.Labels = c.resouceLable
-		roleBinding.Subjects = subjects
-		return c.k8sClient.Create(ctx, roleBinding)
-	}
-
-	reason, ok := utils.IsLegal(roleBinding, c.Product.Name)
-	if !ok {
-		return fmt.Errorf(reason)
-	}
-
-	needUpdate := false
-	if reflect.DeepEqual(roleBinding.Subjects, subjects) {
-		needUpdate = true
-		roleBinding.Subjects = subjects
-	}
-
-	if reflect.DeepEqual(roleBinding.RoleRef, roleBindingTemplate.RoleRef) {
-		needUpdate = true
+		roleBinding.Subjects = roleBindingTemplate.Subjects
 		roleBinding.RoleRef = roleBindingTemplate.RoleRef
-	}
-
-	if needUpdate == false {
+		roleBinding.Subjects[0].Name = groupName
 		return nil
-	}
+	})
 
-	return c.k8sClient.Update(ctx, roleBinding)
+	return err
 }
 
 func (c *destCluster) deleteNamespace(ctx context.Context, namespaceName string) error {
-	namespace := &corev1.Namespace{}
-	key := types.NamespacedName{
-		Name: namespaceName,
+	err := c.deleteResource(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespaceName}})
+
+	if err != nil && !runtimeerrors.IsErrorNotBelongsToProduct(err) {
+		return err
 	}
 
-	err := c.k8sClient.Get(ctx, key, namespace)
-	if err != nil {
-		if client.IgnoreNotFound(err) != nil {
-			return err
-		}
-
-		return nil
-	}
-
-	if !utils.IsBelongsToProduct(namespace, c.Product.Name) {
-		return nil
-	}
-
-	if err := c.DeleteRole(ctx, key.Name); err != nil {
-		return fmt.Errorf("delete role failed: %w", err)
-	}
-
-	return c.k8sClient.Delete(ctx, namespace)
+	return nil
 }
 
 // checkProductNamespaceIsUsing will not delete product namespace if it is using
@@ -435,75 +376,62 @@ func (c *destCluster) deleteProductNamespace(ctx context.Context, codeRepo *naut
 	return c.deleteNamespace(ctx, c.Product.Name)
 }
 
-func (c *destCluster) SyncRole(ctx context.Context, namespaceName string) error {
-	sa := &corev1.ServiceAccount{}
-	key := types.NamespacedName{
-		Namespace: namespaceName,
-		Name:      c.serviceAccountName,
-	}
-	if err := c.k8sClient.Get(ctx, key, sa); err != nil {
-		if client.IgnoreNotFound(err) != nil {
-			return err
-		}
-
+func (c *destCluster) SyncRole(ctx context.Context) error {
+	for _, namespace := range c.Runtime.GetNamespaces() {
 		sa := &corev1.ServiceAccount{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      key.Name,
-				Namespace: key.Namespace,
+				Name:      c.serviceAccountName,
+				Namespace: namespace,
 				Labels:    c.resouceLable,
 			},
 		}
-		if err := c.k8sClient.Create(ctx, sa); err != nil {
-			return fmt.Errorf("create service account failed: %w", err)
-		}
-	} else {
-		reason, ok := utils.IsLegal(sa, c.Product.Name)
-		if !ok {
-			return fmt.Errorf("service account %s is not useable, %s", key.Name, reason)
+
+		_, err := controllerutil.CreateOrUpdate(ctx, c.k8sClient, sa, func() error {
+			reason, ok := utils.IsLegal(sa, c.Product.Name)
+			if !ok {
+				return fmt.Errorf("service account %s is not useable, %s", sa.Name, reason)
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("create sa failed, %w", err)
 		}
 	}
 
-	role := runtimeinterface.Role{
-		Name:   key.Namespace,
-		Users:  []string{c.serviceAccountName},
-		Groups: []string{c.Cluster.Namespace},
-	}
-	clusterRole, err := c.secClient.GetRole(ctx, c.Cluster.Name, role)
+	roleName := c.Runtime.GetName()
+	namespaces := c.Runtime.GetNamespaces()
+	clusterRole, err := c.secClient.GetRole(ctx, c.Cluster.Name, runtimeinterface.Role{Name: roleName})
 	if err != nil {
 		return err
 	}
-	if clusterRole != nil {
+	if clusterRole != nil &&
+		sets.New(clusterRole.Groups...).Equal(sets.New(namespaces...)) {
 		return nil
+	}
+
+	role := runtimeinterface.Role{
+		Name:   roleName,
+		Users:  []string{c.serviceAccountName},
+		Groups: namespaces,
 	}
 	return c.secClient.CreateRole(ctx, c.Cluster.Name, role)
 }
 
-func (c *destCluster) DeleteRole(ctx context.Context, namespaceName string) error {
-	key := types.NamespacedName{
-		Namespace: namespaceName,
-		Name:      c.serviceAccountName,
-	}
-
-	if err := c.deleteResource(ctx, key, &corev1.ServiceAccount{}); err != nil {
-		return fmt.Errorf("delete service account failed: %w", err)
-	}
-	role := runtimeinterface.Role{
-		Name:   key.Namespace,
-		Users:  []string{key.Name},
-		Groups: []string{c.Cluster.Namespace},
-	}
-
-	return c.secClient.DeleteRole(ctx, c.Cluster.Name, role)
+func (c *destCluster) DeleteRole(ctx context.Context) error {
+	return c.secClient.DeleteRole(ctx,
+		c.Cluster.Name,
+		runtimeinterface.Role{Name: c.Runtime.GetName()},
+	)
 }
 
-func (c destCluster) deleteResource(ctx context.Context, key types.NamespacedName, resource client.Object) error {
-	if err := c.k8sClient.Get(ctx, key, resource); err != nil {
+func (c destCluster) deleteResource(ctx context.Context, resource client.Object) error {
+	if err := c.k8sClient.Get(ctx, client.ObjectKeyFromObject(resource), resource); err != nil {
 		return client.IgnoreNotFound(err)
 	}
 
 	ok := utils.IsBelongsToProduct(resource, c.Product.Name)
 	if !ok {
-		return fmt.Errorf("resource %s is not belongs to product %s", key.Name, c.Product.Name)
+		return runtimeerrors.ErrorResourceNotBelongsToProduct(resource.GetName(), c.Product.Name)
 	}
 
 	return c.k8sClient.Delete(ctx, resource)
@@ -525,6 +453,31 @@ func (c destCluster) SyncRepo(ctx context.Context, repos []runtimeinterface.Secr
 	}
 
 	return nil
+}
+
+func (c destCluster) GetNotUsedNamespaces(ctx context.Context, namespaces []string) ([]string, error) {
+	namespacesSet := sets.New(namespaces...)
+	usingNamespaceList := &corev1.NamespaceList{}
+	if err := c.k8sClient.List(ctx, usingNamespaceList, client.MatchingLabels(c.resouceLable)); err != nil {
+		return nil, fmt.Errorf("get using namespace list failed: %w", err)
+	}
+
+	usingNamespaces := []string{}
+	for _, namespace := range usingNamespaceList.Items {
+		usingNamespaces = append(usingNamespaces, namespace.Name)
+	}
+	usingNamespacesSet := sets.New(usingNamespaces...)
+
+	notUsedNamespacesSet := usingNamespacesSet.Difference(namespacesSet)
+	notUsedNamespaces := []string{}
+	for namespace := range notUsedNamespacesSet {
+		if namespace == c.Product.Name {
+			continue
+		}
+		notUsedNamespaces = append(notUsedNamespaces, namespace)
+	}
+
+	return notUsedNamespaces, nil
 }
 
 type externalSecretOptions func(externalsecretcrd.ExternalSecretSpec)

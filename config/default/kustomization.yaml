@@ -31,6 +31,7 @@ patchesStrategicMerge:
 - manager_auth_proxy_patch.yaml
 - manager_image_patch.yaml
 - manager_tls_patch.yaml
+- manager_args_patch.yaml
 # - manager_log_persistence_patch.yaml
 
 # Protect the /metrics endpoint by putting it behind auth.

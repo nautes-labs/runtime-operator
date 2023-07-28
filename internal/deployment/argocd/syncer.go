@@ -23,6 +23,7 @@ import (
 	nautescontext "github.com/nautes-labs/pkg/pkg/context"
 	. "github.com/nautes-labs/runtime-operator/pkg/context"
 	interfaces "github.com/nautes-labs/runtime-operator/pkg/interface"
+	"github.com/nautes-labs/runtime-operator/pkg/utils"
 
 	argocdrbac "github.com/nautes-labs/runtime-operator/pkg/casbin/adapter"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -50,12 +51,11 @@ var (
 )
 
 func (d Syncer) Deploy(ctx context.Context, task interfaces.RuntimeSyncTask) (*interfaces.DeploymentDeploymentResult, error) {
-	history, repoName, destCluster, appProject, app, appSource, policyManager, err := d.initNames(ctx, task)
+	_, repoName, destCluster, appProject, app, appSource, policyManager, err := d.initNames(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("init var faled: %w", err)
 	}
 
-	deployNamespace := task.Runtime.GetName()
 	repoURL, err := d.syncCodeRepo(ctx, task.Product.Name, repoName, *destCluster)
 	if err != nil {
 		return nil, fmt.Errorf("sync code repo failed: %w", err)
@@ -64,18 +64,21 @@ func (d Syncer) Deploy(ctx context.Context, task interfaces.RuntimeSyncTask) (*i
 	appSource.RepoURL = repoURL
 	err = app.SyncApp(ctx, func(spec *argocrd.ApplicationSpec) {
 		spec.Source = *appSource
-		spec.Destination.Namespace = deployNamespace
+		spec.Destination.Namespace = task.Product.Name
 		spec.Project = appProject.GetName()
 	})
 	if err != nil {
 		return nil, fmt.Errorf("sync argocd app %s failed: %w", app.GetName(), err)
 	}
 
-	historyURL := ""
-	if history != nil {
-		historyURL = history.Source
+	deploymenRuntime := task.Runtime.(*nautescrd.DeploymentRuntime)
+	spec, err := d.calcArgoCDAppProjectSpec(ctx, *deploymenRuntime, task.NautesCfg.Nautes.Namespace)
+	if err != nil {
+		return nil, err
 	}
-	appProject.SyncAppPermission(ctx, repoURL, historyURL, deployNamespace, "")
+	if err := appProject.SyncAppProject(ctx, *spec); err != nil {
+		return nil, fmt.Errorf("update argocd app project failed: %w", err)
+	}
 
 	if err := policyManager.AddRole(task.Product.Spec.Name, task.Product.Name, appProject.GetName()); err != nil {
 		return nil, fmt.Errorf("add rbac policy failed: %w", err)
@@ -92,12 +95,11 @@ func (d Syncer) Deploy(ctx context.Context, task interfaces.RuntimeSyncTask) (*i
 }
 
 func (d Syncer) UnDeploy(ctx context.Context, task interfaces.RuntimeSyncTask) error {
-	history, repoName, destCluster, appProject, app, _, policyManager, err := d.initNames(ctx, task)
+	_, repoName, destCluster, appProject, app, _, policyManager, err := d.initNames(ctx, task)
 	if err != nil {
 		return fmt.Errorf("init var faled: %w", err)
 	}
 
-	deployNamespace := task.Runtime.GetName()
 	if err = app.Destroy(ctx); err != nil {
 		return fmt.Errorf("delete argocd app failed: %w", err)
 	}
@@ -112,13 +114,13 @@ func (d Syncer) UnDeploy(ctx context.Context, task interfaces.RuntimeSyncTask) e
 		}
 	}
 
-	historyURL := ""
-	if history != nil {
-		historyURL = history.Source
+	deploymenRuntime := task.Runtime.(*nautescrd.DeploymentRuntime)
+	spec, err := d.calcArgoCDAppProjectSpec(ctx, *deploymenRuntime, task.NautesCfg.Nautes.Namespace)
+	if err != nil {
+		return err
 	}
-
-	if err := appProject.SyncAppPermission(ctx, "", historyURL, "", deployNamespace); err != nil {
-		return fmt.Errorf("revoke permission from argocd app project failed: %w", err)
+	if err := appProject.SyncAppProject(ctx, *spec); err != nil {
+		return fmt.Errorf("update argocd app project failed: %w", err)
 	}
 
 	if appProject.isDeletable() {
@@ -387,6 +389,63 @@ func (d Syncer) getCodeRepo(ctx context.Context, productName, name string) (*nau
 	}
 	newRepo.Spec.URL = fmt.Sprintf("%s/%s/%s.git", provider.Spec.SSHAddress, product.Spec.Name, codeRepo.Spec.RepoName)
 	return newRepo, nil
+}
+
+func (d Syncer) calcArgoCDAppProjectSpec(ctx context.Context, runtime nautescrd.DeploymentRuntime, nautesNamespace string) (*argocrd.AppProjectSpec, error) {
+	productID := runtime.GetProduct()
+	cluster, err := utils.GetClusterByRuntime(ctx, d.K8sClient, nautesNamespace, &runtime)
+	if err != nil {
+		return nil, fmt.Errorf("get runtime %s's cluster failed: %w", runtime.GetName(), err)
+	}
+
+	reservedNamespaces := utils.GetReservedNamespacesByProduct(*cluster, productID)
+	productNamespaces, err := utils.GetProductNamespacesInCluster(ctx, d.K8sClient, productID, cluster.Name)
+	if err != nil {
+		return nil, fmt.Errorf("get product namespace in cluster %s failed: %w", cluster.Name, err)
+	}
+	appProjectNamespaces := append(reservedNamespaces, productNamespaces...)
+
+	urls, err := utils.GetURLsInCluster(ctx, d.K8sClient, productID, cluster.Name, nautesNamespace)
+	if err != nil {
+		return nil, fmt.Errorf("get product URLs in cluster %s failed: %w", cluster.Name, err)
+	}
+
+	appProjectSpec := &argocrd.AppProjectSpec{
+		SourceRepos:              urls,
+		Destinations:             getAppProjectDestinations(appProjectNamespaces),
+		ClusterResourceWhitelist: getAppProjectClusterResourceWhitelist(*cluster, productID),
+	}
+
+	return appProjectSpec, nil
+}
+
+func getAppProjectDestinations(destinations []string) []argocrd.ApplicationDestination {
+	appProjectDestinations := []argocrd.ApplicationDestination{}
+	for _, namespace := range destinations {
+		appProjectDestinations = append(appProjectDestinations, argocrd.ApplicationDestination{
+			Server:    "*",
+			Namespace: namespace,
+		})
+	}
+
+	return appProjectDestinations
+}
+
+func getAppProjectClusterResourceWhitelist(cluster nautescrd.Cluster, productID string) []metav1.GroupKind {
+	var clusterResourcesWhiteList []metav1.GroupKind
+	if cluster.Spec.ProductAllowedClusterResources != nil {
+		productName := utils.GetProductNameByIDInCluster(cluster, productID)
+		clusterResources, ok := cluster.Spec.ProductAllowedClusterResources[productName]
+		if ok {
+			for _, clusterResource := range clusterResources {
+				clusterResourcesWhiteList = append(clusterResourcesWhiteList, metav1.GroupKind{
+					Group: clusterResource.Group,
+					Kind:  clusterResource.Kind,
+				})
+			}
+		}
+	}
+	return clusterResourcesWhiteList
 }
 
 func isSameCodeRepo(from, to *nautescrd.CodeRepo) bool {

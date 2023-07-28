@@ -56,4 +56,5 @@ type Runtime interface {
 	GetProduct() string
 	GetName() string
 	GetDestination() string
+	GetNamespaces() []string
 }
