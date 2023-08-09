@@ -2,9 +2,9 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![golang](https://img.shields.io/badge/golang-v1.20.5-brightgreen)](https://go.dev/doc/install)
-
 [![version](https://img.shields.io/badge/version-v0.3.6-green)]()
 
+⚠️**该代码库已停止更新，并将在未来的某个时间被移除，其代码已被合并至 [Nautes](https://github.com/nautes-labs/nautes)。**
 
 Runtime Operator 项目提供了一组用于调谐 Project Pipeline Runtime 资源和 Deployment Runtime 资源事件的 Controller，调谐内容主要是根据两类运行时资源的声明信息，在目标集群上同步流水线执行或应用部署所需的基础环境。
 
